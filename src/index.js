@@ -230,6 +230,7 @@ function buildTicketButtons({ claimed = false, closed = false } = {}) {
 
 async function lockChannel(channel, applicantId) {
   try {
+    console.log(`Sperre Channel ${channel.id} für ${applicantId || 'alle'}`);
     await channel.permissionOverwrites.edit(channel.guild.roles.everyone, { SendMessages: false });
     if (applicantId) {
       await channel.permissionOverwrites.edit(applicantId, { SendMessages: false });
@@ -237,8 +238,10 @@ async function lockChannel(channel, applicantId) {
     if (!channel.name.startsWith('closed-')) {
       await channel.setName(`closed-${channel.name}`);
     }
+    console.log(`Channel ${channel.id} erfolgreich gesperrt`);
   } catch (error) {
-    console.error('Fehler beim Sperren des Channels:', error);
+    console.error(`Fehler beim Sperren des Channels ${channel.id}:`, error);
+    throw error; // Fehler weiterwerfen für bessere Behandlung
   }
 }
 
@@ -252,9 +255,12 @@ function readTicketMeta(channel) {
 
 async function writeTicketMeta(channel, meta) {
   try {
+    console.log(`Schreibe Meta-Daten für Channel ${channel.id}:`, meta);
     await channel.setTopic(JSON.stringify(meta));
+    console.log(`Meta-Daten erfolgreich gespeichert für Channel ${channel.id}`);
   } catch (error) {
-    console.error('Fehler beim Speichern der Meta-Daten:', error);
+    console.error(`Fehler beim Speichern der Meta-Daten für Channel ${channel.id}:`, error);
+    throw error; // Fehler weiterwerfen für bessere Behandlung
   }
 }
 
@@ -525,7 +531,14 @@ client.on('interactionCreate', async (interaction) => {
           meta.claimedBy = interaction.user.id;
           meta.claimedAt = Date.now();
           meta.status = 'claimed';
-          await writeTicketMeta(channel, meta);
+          
+          try {
+            await writeTicketMeta(channel, meta);
+            console.log(`[${traceId}] Meta-Daten erfolgreich aktualisiert`);
+          } catch (metaError) {
+            console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
+            // Meta-Fehler nicht kritisch, weitermachen
+          }
 
           // Channel-Nachricht
           console.log(`[${traceId}] Sende Channel-Nachricht`);
@@ -551,11 +564,24 @@ client.on('interactionCreate', async (interaction) => {
           meta.closedBy = interaction.user.id;
           meta.closedAt = Date.now();
           meta.status = 'closed';
-          await writeTicketMeta(channel, meta);
+          
+          try {
+            await writeTicketMeta(channel, meta);
+            console.log(`[${traceId}] Meta-Daten erfolgreich aktualisiert`);
+          } catch (metaError) {
+            console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
+            // Meta-Fehler nicht kritisch, weitermachen
+          }
 
           // Channel sperren
           console.log(`[${traceId}] Sperre Channel`);
-          await lockChannel(channel, meta.applicantDiscordId);
+          try {
+            await lockChannel(channel, meta.applicantDiscordId);
+            console.log(`[${traceId}] Channel erfolgreich gesperrt`);
+          } catch (lockError) {
+            console.error(`[${traceId}] Fehler beim Sperren des Channels:`, lockError);
+            // Lock-Fehler nicht kritisch, weitermachen
+          }
 
           // Channel-Nachricht
           console.log(`[${traceId}] Sende Channel-Nachricht`);

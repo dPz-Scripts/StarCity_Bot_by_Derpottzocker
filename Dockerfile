@@ -1,24 +1,25 @@
-# ---- Build cache buster (jede Änderung -> Full Rebuild) ----
-ARG APP_REV=v4-03
+# ---- Force full rebuild when this changes ----
+ARG APP_REV=v4-04
 
-# ---- Basis ----
+# ---- Base image ----
 FROM node:22-alpine
 
-# cache-buster erst NACH FROM setzen
+# cache-buster var (must be AFTER FROM)
 ENV APP_REV=${APP_REV}
 
 WORKDIR /app
 
-# Nur package-Dateien zuerst (Cache effizient)
+# Copy only package files first (better cache)
 COPY package*.json ./
 
-# Prod-Dependencies
-RUN npm ci --omit=dev
+# Install prod deps (robust: npm install statt npm ci)
+RUN npm install --omit=dev --no-audit --no-fund
 
-# Rest der App
+# Copy the rest of the app
 COPY . .
 
-# Port
+# Runtime env
+ENV NODE_ENV=production
 ENV PORT=3000
 
 # Start

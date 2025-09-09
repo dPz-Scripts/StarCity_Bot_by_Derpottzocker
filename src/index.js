@@ -97,7 +97,9 @@ const slashCache = new Map(); // guildId:userId:charName -> { inflight: boolean,
 const webhookCache = new Map(); // websiteTicketId oder hash -> { inflight: boolean, recent: timestamp }
 
 function createSlashKey(guildId, userId, charName) {
-  return `${guildId}:${userId}:${charName.toLowerCase().trim()}`;
+  // Eindeutiger Key mit Zeitstempel für bessere Idempotenz
+  const timeWindow = Math.floor(Date.now() / 10000); // 10-Sekunden-Fenster
+  return `slash:${guildId}:${userId}:${charName.toLowerCase().trim()}:${timeWindow}`;
 }
 
 function createWebhookKey(websiteTicketId, discordId, charName) {
@@ -389,6 +391,8 @@ client.on('interactionCreate', async (interaction) => {
     const charName = interaction.options.getString('charname', true);
     const slashKey = createSlashKey(process.env.GUILD_ID, interaction.user.id, charName);
     
+    console.log(`${trace} SCHRITT: Cache-Key erstellt: ${slashKey}`);
+    
     // Idempotenz prüfen
     const idempCheck = checkIdempotency(slashCache, slashKey, trace);
     if (!idempCheck.allowed) {
@@ -498,7 +502,14 @@ client.on('interactionCreate', async (interaction) => {
         console.error(`${trace} SCHRITT: channel.send Übernahme FEHLGESCHLAGEN`, e?.code, e?.message || e);
       }
 
-      await interaction.reply({ content: '✅ Übernahme bestätigt.', ephemeral: true });
+      // Ephemere Antwort für den Staff-Mitglied
+      try {
+        await interaction.reply({ content: '✅ Übernahme bestätigt.', ephemeral: true });
+        console.log(`${trace} SCHRITT: Ephemere Antwort gesendet`);
+      } catch (e) {
+        console.error(`${trace} SCHRITT: Ephemere Antwort FEHLGESCHLAGEN`, e?.code, e?.message || e);
+      }
+      
       console.timeEnd(trace);
       return;
     }
@@ -525,7 +536,14 @@ client.on('interactionCreate', async (interaction) => {
         console.error(`${trace} SCHRITT: channel.send Schließung FEHLGESCHLAGEN`, e?.code, e?.message || e);
       }
 
-      await interaction.reply({ content: '🔒 Ticket geschlossen.', ephemeral: true });
+      // Ephemere Antwort für den Staff-Mitglied
+      try {
+        await interaction.reply({ content: '🔒 Ticket geschlossen.', ephemeral: true });
+        console.log(`${trace} SCHRITT: Ephemere Antwort gesendet`);
+      } catch (e) {
+        console.error(`${trace} SCHRITT: Ephemere Antwort FEHLGESCHLAGEN`, e?.code, e?.message || e);
+      }
+      
       console.timeEnd(trace);
       return;
     }

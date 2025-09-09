@@ -1,9 +1,11 @@
 # ---- Build cache buster (jede Änderung -> Full Rebuild) ----
-ARG APP_REV=v4-01
-ENV APP_REV=${APP_REV}
+ARG APP_REV=v4-03
 
 # ---- Basis ----
 FROM node:22-alpine
+
+# cache-buster erst NACH FROM setzen
+ENV APP_REV=${APP_REV}
 
 WORKDIR /app
 

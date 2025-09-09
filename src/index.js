@@ -272,6 +272,33 @@ function buildTicketButtons({ claimed = false, closed = false } = {}) {
   return row;
 }
 
+// Nachrichten robust im Ticket-Channel posten (mit Rechte-Check & Logging)
+async function safeChannelSend(channel, guild, content, traceId = 'n/a') {
+  try {
+    const fetched = await guild.channels.fetch(channel.id).catch(() => null);
+    if (!fetched) {
+      console.warn(`[${traceId}] safeChannelSend: Channel nicht gefunden`);
+      return { ok: false, reason: 'not_found' };
+    }
+    const me = guild.members.me;
+    const perms = fetched.permissionsFor(me);
+    const can = perms?.has(PermissionFlagsBits.ViewChannel)
+      && perms?.has(PermissionFlagsBits.SendMessages)
+      && perms?.has(PermissionFlagsBits.ReadMessageHistory);
+    console.log(`[${traceId}] safeChannelSend: perms -> view=${perms?.has(PermissionFlagsBits.ViewChannel)} send=${perms?.has(PermissionFlagsBits.SendMessages)} history=${perms?.has(PermissionFlagsBits.ReadMessageHistory)}`);
+    if (!can) {
+      console.warn(`[${traceId}] safeChannelSend: Fehlende Rechte zum Senden im Channel ${channel.id}`);
+      return { ok: false, reason: 'missing_perms' };
+    }
+    await fetched.send(content);
+    console.log(`[${traceId}] safeChannelSend: Nachricht gesendet`);
+    return { ok: true };
+  } catch (err) {
+    console.error(`[${traceId}] safeChannelSend: Fehler beim Senden:`, err);
+    return { ok: false, reason: 'error', error: err };
+  }
+}
+
 async function lockChannel(channel, applicantId) {
   try {
     console.log(`Sperre Channel ${channel.id} für ${applicantId || 'alle'}`);
@@ -622,22 +649,14 @@ client.on('interactionCreate', async (interaction) => {
             console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
           }
 
-          // Channel-Nachricht
+          // Channel-Nachricht (robust)
           console.log(`[${traceId}] Sende Channel-Nachricht`);
-          try {
-            const channelMessage = `✅ **Ticket übernommen**\n\n<@${interaction.user.id}> hat das Ticket übernommen.\nEs wird sich nun um deine Angelegenheiten gekümmert. Habe jedoch Geduld, wenn dir nicht immer sofort geantwortet wird.`;
-            const fetchedChannel = await interaction.guild.channels.fetch(channel.id).catch(() => null);
-            const canSend = fetchedChannel?.permissionsFor(interaction.guild.members.me)?.has(PermissionFlagsBits.SendMessages);
-            if (fetchedChannel && canSend) {
-              await fetchedChannel.send(channelMessage);
-              console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet: ${channelMessage}`);
-            } else {
-              console.warn(`[${traceId}] Kann keine Channel-Nachricht senden (fehlende Rechte?)`);
-              await interaction.followUp({ content: '⚠️ Konnte keine Nachricht im Channel posten (fehlende Rechte?).', flags: 64 });
+          {
+            const msg = `✅ **Ticket übernommen**\n\n<@${interaction.user.id}> hat das Ticket übernommen.\nEs wird sich nun um deine Angelegenheiten gekümmert. Habe jedoch Geduld, wenn dir nicht immer sofort geantwortet wird.`;
+            const result = await safeChannelSend(channel, interaction.guild, msg, traceId);
+            if (!result.ok) {
+              await interaction.followUp({ content: '⚠️ Konnte keine Nachricht im Channel posten (fehlende Rechte?).', flags: 64 }).catch(() => {});
             }
-          } catch (channelError) {
-            console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht:`, channelError);
-            try { await interaction.followUp({ content: '⚠️ Fehler beim Posten der Channel-Nachricht.', flags: 64 }); } catch {}
           }
           
           return;
@@ -682,31 +701,23 @@ client.on('interactionCreate', async (interaction) => {
             console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
           }
 
-          // Channel sperren
+          // Channel-Nachricht (vor dem Sperren senden)
+          console.log(`[${traceId}] Sende Channel-Nachricht`);
+          {
+            const msg = `🔒 **Ticket geschlossen**\n\n<@${interaction.user.id}> hat das Ticket geschlossen.\nVielen Dank für deine Bewerbung bei StarCity!`;
+            const result = await safeChannelSend(channel, interaction.guild, msg, traceId);
+            if (!result.ok) {
+              await interaction.followUp({ content: '⚠️ Konnte keine Nachricht im Channel posten (fehlende Rechte?).', flags: 64 }).catch(() => {});
+            }
+          }
+
+          // Channel sperren (nachdem die Nachricht gesendet wurde)
           console.log(`[${traceId}] Sperre Channel`);
           try {
             await lockChannel(channel, meta.applicantDiscordId);
             console.log(`[${traceId}] Channel erfolgreich gesperrt`);
           } catch (lockError) {
             console.error(`[${traceId}] Fehler beim Sperren des Channels:`, lockError);
-          }
-
-          // Channel-Nachricht
-          console.log(`[${traceId}] Sende Channel-Nachricht`);
-          try {
-            const channelMessage = `🔒 **Ticket geschlossen**\n\n<@${interaction.user.id}> hat das Ticket geschlossen.\nVielen Dank für deine Bewerbung bei StarCity!`;
-            const fetchedChannel = await interaction.guild.channels.fetch(channel.id).catch(() => null);
-            const canSend = fetchedChannel?.permissionsFor(interaction.guild.members.me)?.has(PermissionFlagsBits.SendMessages);
-            if (fetchedChannel && canSend) {
-              await fetchedChannel.send(channelMessage);
-              console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet: ${channelMessage}`);
-            } else {
-              console.warn(`[${traceId}] Kann keine Channel-Nachricht senden (fehlende Rechte?)`);
-              await interaction.followUp({ content: '⚠️ Konnte keine Nachricht im Channel posten (fehlende Rechte?).', flags: 64 });
-            }
-          } catch (channelError) {
-            console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht:`, channelError);
-            try { await interaction.followUp({ content: '⚠️ Fehler beim Posten der Channel-Nachricht.', flags: 64 }); } catch {}
           }
           
           return;

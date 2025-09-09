@@ -17,7 +17,7 @@ import {
 /* ===========================
    VERSION & BRAND
    =========================== */
-const STARSTYLE_VERSION = 'StarCity style v6.2';
+const STARSTYLE_VERSION = 'StarCity style v6.4';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
@@ -54,6 +54,22 @@ const normalizeAnswers = (raw) => {
     .filter((x) => x.a !== '—');
 };
 
+// ---- sichere Antwort-Helfer (verhindert 50027-Crash) ----
+const toPayload = (x) => (typeof x === 'string' ? { content: x } : x || { content: 'OK' });
+
+async function safeEditReply(interaction, payload) {
+  try {
+    await interaction.editReply(toPayload(payload));
+  } catch (e) {
+    // Token abgelaufen oder ungültig -> in den Kanal schreiben statt crashen
+    if (e?.code === 50027 || e?.status === 401) {
+      try { await interaction.channel?.send(toPayload(payload)); } catch {}
+    } else {
+      throw e;
+    }
+  }
+}
+
 /* ===========================
    DISCORD CLIENT
    =========================== */
@@ -75,6 +91,18 @@ client.once('ready', async () => {
 client.login(process.env.DISCORD_TOKEN);
 
 /* ===========================
+   GLOBAL ERROR HANDLER (crash-sicher)
+   =========================== */
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED REJECTION:', reason?.code, reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err?.code, err?.message || err);
+});
+client.on('error', (err) => console.error('CLIENT ERROR:', err?.code, err?.message || err));
+client.on('shardError', (err) => console.error('SHARD ERROR:', err?.code, err?.message || err));
+
+/* ===========================
    SLASH COMMANDS
    =========================== */
 async function registerSlashCommands() {
@@ -91,7 +119,7 @@ async function registerSlashCommands() {
 }
 
 /* ===========================
-   PERMISSIONS (optional)
+   PERMISSIONS
    =========================== */
 function hasNeededPermsIn(channelOrId) {
   try {
@@ -126,12 +154,8 @@ async function lockChannelSend(channel, applicantId) {
   if (!channel.name.startsWith('closed-')) await channel.setName(`closed-${channel.name}`).catch(() => {});
 }
 
-function readMeta(channel) {
-  try { return JSON.parse(channel.topic || '{}'); } catch { return {}; }
-}
-async function writeMeta(channel, meta) {
-  await channel.setTopic(JSON.stringify(meta)).catch(() => {});
-}
+function readMeta(channel) { try { return JSON.parse(channel.topic || '{}'); } catch { return {}; } }
+async function writeMeta(channel, meta) { await channel.setTopic(JSON.stringify(meta)).catch(() => {}); }
 
 /* ===========================
    TICKET-CHANNEL (StarCity Style + Buttons)
@@ -174,12 +198,10 @@ async function createTicketChannel({
   const channelName = `whitelist-${safeName}-${shortId}`;
   const caseId = makeCaseId();
 
-  // Overwrites
+  // Overwrites – Bot inkl. ManageChannels
   const overwrites = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-    // Staff darf lesen/schreiben
     { id: staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-    // **Bot** braucht zusätzlich MANAGE_CHANNELS!
     { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
   ];
   if (applicantDiscordId) {
@@ -208,7 +230,7 @@ async function createTicketChannel({
   };
   await writeMeta(channel, meta);
 
-  // EMBED (StarCity)
+  // EMBED
   const embed = new EmbedBuilder()
     .setColor(BRAND.color)
     .setTitle('📨 Whitelist-Ticket eröffnet')
@@ -244,7 +266,7 @@ async function createTicketChannel({
     embed.addFields({ name: trunc(`Frage ${i + 1}: ${qa[i].q}`, 256), value: trunc(qa[i].a, 1024), inline: false });
   }
 
-  // Embed + Buttons senden
+  // embed + buttons
   const sent = await channel.send({
     content: `<@&${process.env.STAFF_ROLE_ID}> Neues Ticket`,
     embeds: [embed],
@@ -292,10 +314,10 @@ client.on('interactionCreate', async (interaction) => {
           ],
         },
       });
-      await interaction.editReply({ content: `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` });
+      await safeEditReply(interaction, `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`);
     } catch (e) {
       console.error('❌ Ticket-Fehler:', e?.code, e?.message);
-      await interaction.editReply('❌ Konnte Ticket nicht erstellen (Details in Logs).');
+      await safeEditReply(interaction, '❌ Konnte Ticket nicht erstellen (Details in Logs).');
     }
     return;
   }
@@ -303,71 +325,62 @@ client.on('interactionCreate', async (interaction) => {
   // Buttons
   if (!interaction.isButton()) return;
 
-  // Staff-Check gegen ENV-ROLE
-  const staffRoleId = process.env.STAFF_ROLE_ID;
-  if (!staffRoleId) { try { await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht gesetzt.', flags: 64 }); } catch {} return; }
-  const isStaff = interaction.member.roles.cache.has(staffRoleId);
-  if (!isStaff) { try { await interaction.reply({ content: '❌ Nur Staff darf diese Aktion nutzen.', flags: 64 }); } catch {} return; }
+  try {
+    const staffRoleId = process.env.STAFF_ROLE_ID;
+    if (!staffRoleId) { await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht gesetzt.', flags: 64 }); return; }
+    const isStaff = interaction.member.roles.cache.has(staffRoleId);
+    if (!isStaff) { await interaction.reply({ content: '❌ Nur Staff darf diese Aktion nutzen.', flags: 64 }); return; }
 
-  // Ack
-  try { await interaction.deferReply({ flags: 64 }); } catch { return; }
+    await interaction.deferReply({ flags: 64 });
 
-  const channel = interaction.channel;
-  const meta = readMeta(channel) || {};
-  const applicantId = meta.applicantDiscordId || null;
+    const channel = interaction.channel;
+    const meta = readMeta(channel) || {};
+    const applicantId = meta.applicantDiscordId || null;
 
-  // Helper: Original-Buttons aktualisieren
-  const editButtons = async (state) => {
-    try {
-      if (!meta.originalMessageId) return;
-      const msg = await channel.messages.fetch(meta.originalMessageId).catch(() => null);
-      if (!msg) return;
-      await msg.edit({ components: [buildButtonsState(state)] });
-    } catch (e) {
-      console.error('❌ Button-Edit-Fehler:', e?.code, e?.message);
+    // Bot-Rechte
+    const botPerms = channel.permissionsFor(interaction.guild.members.me);
+    if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
+      console.error('BTN: fehlende Rechte ManageChannels in', channel.id);
+      await safeEditReply(interaction, '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.');
+      return;
     }
-  };
 
-  // Common permission precheck (für Close/Claim brauchen wir ManageChannels für Rename/Overwrites)
-  const botPerms = channel.permissionsFor(interaction.guild.members.me);
-  if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
-    await interaction.editReply('❌ Mir fehlt **Manage Channels** in diesem Kanal/Kategorie.');
-    return;
-  }
-
-  if (interaction.customId === 'ticket_claim') {
-    try {
-      if (meta.claimedBy) {
-        await interaction.editReply(`ℹ️ Bereits übernommen von <@${meta.claimedBy}>.`);
-        return;
+    const editButtons = async (state) => {
+      try {
+        if (!meta.originalMessageId) return;
+        const msg = await channel.messages.fetch(meta.originalMessageId);
+        await msg.edit({ components: [buildButtonsState(state)] });
+      } catch (e) {
+        console.error('BTN: Button-Edit-Fehler', e?.code, e?.message);
       }
+    };
+
+    if (interaction.customId === 'ticket_claim') {
+      if (meta.claimedBy) { await safeEditReply(interaction, `ℹ️ Bereits übernommen von <@${meta.claimedBy}>.`); return; }
       meta.claimedBy = interaction.user.id;
       meta.claimedAt = Date.now();
       await writeMeta(channel, meta);
       await editButtons({ claimed: true, closed: false });
       await channel.send(`✅ <@${interaction.user.id}> **hat das Ticket übernommen.**`);
-      await interaction.editReply('Übernahme bestätigt.');
-    } catch (e) {
-      console.error('❌ Claim-Fehler:', e?.code, e?.message);
-      await interaction.editReply('❌ Konnte Ticket nicht übernehmen (Details in Logs).');
+      await safeEditReply(interaction, 'Übernahme bestätigt.');
+      return;
     }
-    return;
-  }
 
-  if (interaction.customId === 'ticket_close') {
-    try {
+    if (interaction.customId === 'ticket_close') {
       meta.closedBy = interaction.user.id;
       meta.closedAt = Date.now();
       await writeMeta(channel, meta);
       await lockChannelSend(channel, applicantId);
       await editButtons({ claimed: !!meta.claimedBy, closed: true });
       await channel.send(`🔒 <@${interaction.user.id}> **hat das Ticket geschlossen.**`);
-      await interaction.editReply('Ticket geschlossen.');
-    } catch (e) {
-      console.error('❌ Close-Fehler:', e?.code, e?.message);
-      await interaction.editReply('❌ Konnte Ticket nicht schließen (Details in Logs).');
+      await safeEditReply(interaction, 'Ticket geschlossen.');
+      return;
     }
-    return;
+
+    await safeEditReply(interaction, 'ℹ️ Unbekannte Aktion.');
+  } catch (e) {
+    console.error('BTN: Unhandled error', e?.code, e?.message || e);
+    try { await safeEditReply(interaction, '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).'); } catch {}
   }
 });
 

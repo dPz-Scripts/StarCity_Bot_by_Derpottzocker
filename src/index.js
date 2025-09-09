@@ -15,7 +15,7 @@ import {
 } from 'discord.js';
 
 /* ===========================
-   VERSION & BRAND
+   VERSION & BRANDING
    =========================== */
 const STARSTYLE_VERSION = 'StarCity style v6.9';
 
@@ -27,7 +27,7 @@ const BRAND = {
 };
 
 /* ===========================
-   HELPERS
+   HILFSFUNKTIONEN
    =========================== */
 const clean = (v, fb = '—') => {
   if (v === null || v === undefined) return fb;
@@ -54,7 +54,7 @@ const normalizeAnswers = (raw) => {
     .filter((x) => x.a !== '—');
 };
 
-/* ---------- ACK/RESPONSE + TRACE ---------- */
+/* ---------- BESTÄTIGUNG/ANTWORT + TRACE ---------- */
 const toPayload = (x) => (typeof x === 'string' ? { content: x } : (x || { content: 'OK' }));
 
 async function ackNow(interaction, trace) {
@@ -92,7 +92,69 @@ async function editOrFollowUp(interaction, payload, trace) {
   }
 }
 
-/* ---------- DEDUPE ---------- */
+/* ---------- IDEMPOTENZ CACHES ---------- */
+const slashCache = new Map(); // guildId:userId:charName -> { inflight: boolean, recent: timestamp }
+const webhookCache = new Map(); // websiteTicketId oder hash -> { inflight: boolean, recent: timestamp }
+
+function createSlashKey(guildId, userId, charName) {
+  return `${guildId}:${userId}:${charName.toLowerCase().trim()}`;
+}
+
+function createWebhookKey(websiteTicketId, discordId, charName) {
+  if (websiteTicketId) return websiteTicketId;
+  const hash = crypto.createHash('sha256').update(`${discordId}:${charName}`).digest('hex').slice(0, 16);
+  return `hash:${hash}`;
+}
+
+function checkIdempotency(cache, key, trace) {
+  const entry = cache.get(key);
+  if (!entry) {
+    cache.set(key, { inflight: true, recent: Date.now() });
+    console.log(`${trace} IDEMPOTENZ: neue Anfrage`);
+    return { allowed: true, reason: 'new' };
+  }
+  
+  if (entry.inflight) {
+    console.log(`${trace} IDEMPOTENZ: bereits in Bearbeitung`);
+    return { allowed: false, reason: 'inflight' };
+  }
+  
+  const age = Date.now() - entry.recent;
+  if (age < 300000) { // 5 Minuten
+    console.log(`${trace} IDEMPOTENZ: zu kürzlich (vor ${Math.round(age/1000)}s)`);
+    return { allowed: false, reason: 'recent' };
+  }
+  
+  entry.inflight = true;
+  entry.recent = Date.now();
+  console.log(`${trace} IDEMPOTENZ: erlaubt (vor ${Math.round(age/1000)}s)`);
+  return { allowed: true, reason: 'retry' };
+}
+
+function markComplete(cache, key, trace) {
+  const entry = cache.get(key);
+  if (entry) {
+    entry.inflight = false;
+    console.log(`${trace} IDEMPOTENZ: als abgeschlossen markiert`);
+  }
+}
+
+// Alte Einträge alle 10 Minuten bereinigen
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of slashCache.entries()) {
+    if (!entry.inflight && now - entry.recent > 1800000) { // 30 Minuten
+      slashCache.delete(key);
+    }
+  }
+  for (const [key, entry] of webhookCache.entries()) {
+    if (!entry.inflight && now - entry.recent > 1800000) { // 30 Minuten
+      webhookCache.delete(key);
+    }
+  }
+}, 600000);
+
+/* ---------- DEDUPLIZIERUNG ---------- */
 const seen = new Map();
 function isDuplicate(id) {
   if (seen.has(id)) return true;
@@ -108,7 +170,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`✅ Eingeloggt als ${client.user.tag}`);
   console.log(`🎨 ${STARSTYLE_VERSION}`);
   try {
@@ -122,7 +184,7 @@ client.once('ready', async () => {
 client.login(process.env.DISCORD_TOKEN);
 
 /* ===========================
-   GLOBAL ERROR HANDLER
+   GLOBALER FEHLERHANDLER
    =========================== */
 process.on('unhandledRejection', (reason) => {
   console.error('UNHANDLED REJECTION:', reason?.code, reason?.message || reason);
@@ -150,7 +212,7 @@ async function registerSlashCommands() {
 }
 
 /* ===========================
-   PERMISSIONS
+   BERECHTIGUNGEN
    =========================== */
 function hasNeededPermsIn(channelOrId) {
   try {
@@ -170,7 +232,7 @@ function hasNeededPermsIn(channelOrId) {
 }
 
 /* ===========================
-   TICKET-UTILS
+   TICKET-UTILITIES
    =========================== */
 function buildButtonsState({ claimed = false, closed = false } = {}) {
   return new ActionRowBuilder().addComponents(
@@ -229,7 +291,7 @@ async function createTicketChannel({
   const channelName = `whitelist-${safeName}-${shortId}`;
   const caseId = makeCaseId();
 
-  // Overwrites – Bot inkl. ManageChannels
+  // Berechtigungsüberschreibungen – Bot inkl. ManageChannels
   const overwrites = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
     { id: staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
@@ -294,7 +356,7 @@ async function createTicketChannel({
     embed.addFields({ name: trunc(`Frage ${i + 1}: ${qa[i].q}`, 256), value: trunc(qa[i].a, 1024), inline: false });
   }
 
-  // embed + buttons
+  // Embed + Buttons
   const sent = await channel.send({
     content: `<@&${process.env.STAFF_ROLE_ID}> Neues Ticket`,
     embeds: [embed],
@@ -309,7 +371,7 @@ async function createTicketChannel({
 }
 
 /* ===========================
-   INTERACTIONS (Slash + Buttons)
+   INTERAKTIONEN (Slash + Buttons)
    =========================== */
 client.on('interactionCreate', async (interaction) => {
   const traceBase = `TRACE[${interaction.id}]`;
@@ -320,9 +382,23 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName !== 'ticket-test') return;
     const trace = `${traceBase} SLASH`;
     console.time(trace);
+    console.log(`${trace} START by ${interaction.user?.tag || interaction.user?.id}`);
+    
     await ackNow(interaction, trace);
     try {
       const charName = interaction.options.getString('charname', true);
+      const slashKey = createSlashKey(process.env.GUILD_ID, interaction.user.id, charName);
+      
+      // Idempotenz prüfen
+      const idempCheck = checkIdempotency(slashCache, slashKey, trace);
+      if (!idempCheck.allowed) {
+        const reason = idempCheck.reason === 'inflight' ? 'Ticket wird bereits erstellt...' : 'Zu viele Tickets in kurzer Zeit. Bitte warte 5 Minuten.';
+        await editOrFollowUp(interaction, `⚠️ ${reason}`, trace);
+        console.timeEnd(trace);
+        return;
+      }
+      
+      console.log(`${trace} SCHRITT: Ticket-Channel wird erstellt`);
       const { channel } = await createTicketChannel({
         guildId: process.env.GUILD_ID,
         categoryId: process.env.TICKETS_CATEGORY_ID,
@@ -345,6 +421,9 @@ client.on('interactionCreate', async (interaction) => {
           ],
         },
       });
+      
+      markComplete(slashCache, slashKey, trace);
+      console.log(`${trace} SCHRITT: Ticket erfolgreich erstellt`);
       await editOrFollowUp(interaction, `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`, trace);
     } catch (e) {
       console.error(`${trace} ERROR:`, e?.code, e?.message || e);
@@ -359,25 +438,33 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
   const trace = `${traceBase} BTN:${interaction.customId}`;
   console.time(trace);
-  console.log(`${trace} click by ${interaction.user?.tag || interaction.user?.id} in #${interaction.channel?.id} (replied:${interaction.replied} deferred:${interaction.deferred})`);
+  console.log(`${trace} START by ${interaction.user?.tag || interaction.user?.id} in #${interaction.channel?.id}`);
 
   await ackNow(interaction, trace);
 
   try {
     const staffRoleId = process.env.STAFF_ROLE_ID;
-    if (!staffRoleId) { await editOrFollowUp(interaction, '⚠️ STAFF_ROLE_ID nicht gesetzt.', trace); return; }
+    if (!staffRoleId) { 
+      console.log(`${trace} SCHRITT: STAFF_ROLE_ID fehlt`);
+      await editOrFollowUp(interaction, '⚠️ STAFF_ROLE_ID nicht gesetzt.', trace); 
+      return; 
+    }
 
     const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
-    if (!isStaff) { await editOrFollowUp(interaction, '❌ Nur Staff darf diese Aktion nutzen.', trace); return; }
+    if (!isStaff) { 
+      console.log(`${trace} SCHRITT: Benutzer ist kein Staff`);
+      await editOrFollowUp(interaction, '❌ Nur Staff darf diese Aktion nutzen.', trace); 
+      return; 
+    }
 
     const channel = interaction.channel;
     const meta = readMeta(channel) || {};
     const applicantId = meta.applicantDiscordId || null;
 
-    // Rechte
+    // Berechtigungen prüfen
     const botPerms = channel.permissionsFor(interaction.guild.members.me);
     if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
-      console.error(`${trace} fehlende Rechte ManageChannels`);
+      console.error(`${trace} SCHRITT: ManageChannels-Berechtigung fehlt`);
       await editOrFollowUp(interaction, '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.', trace);
       return;
     }
@@ -386,13 +473,15 @@ client.on('interactionCreate', async (interaction) => {
     const setButtonsOnMessage = async (state) => {
       try {
         await interaction.message.edit({ components: [buildButtonsState(state)] });
-        console.log(`${trace} buttons updated on interaction.message`);
+        console.log(`${trace} SCHRITT: Buttons auf interaction.message aktualisiert OK`);
       } catch (e) {
-        console.error(`${trace} buttons edit on interaction.message failed`, e?.code, e?.message || e);
+        console.error(`${trace} SCHRITT: Button-Update auf interaction.message FEHLGESCHLAGEN`, e?.code, e?.message || e);
       }
     };
 
     if (interaction.customId === 'ticket_claim') {
+      console.log(`${trace} SCHRITT: Übernahme wird verarbeitet`);
+      
       // UI sofort anpassen
       await setButtonsOnMessage({ claimed: true, closed: false });
 
@@ -400,12 +489,13 @@ client.on('interactionCreate', async (interaction) => {
       meta.claimedBy = interaction.user.id;
       meta.claimedAt = Date.now();
       await writeMeta(channel, meta);
+      console.log(`${trace} SCHRITT: Meta aktualisiert`);
 
       try {
         await channel.send(`✅ <@${interaction.user.id}> **hat das Ticket übernommen.**`);
-        console.log(`${trace} channel.send claim OK`);
+        console.log(`${trace} SCHRITT: channel.send Übernahme OK`);
       } catch (e) {
-        console.error(`${trace} channel.send claim FAIL`, e?.code, e?.message || e);
+        console.error(`${trace} SCHRITT: channel.send Übernahme FEHLGESCHLAGEN`, e?.code, e?.message || e);
       }
 
       await editOrFollowUp(interaction, 'Übernahme bestätigt.', trace);
@@ -414,6 +504,8 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.customId === 'ticket_close') {
+      console.log(`${trace} SCHRITT: Schließung wird verarbeitet`);
+      
       // UI sofort anpassen
       await setButtonsOnMessage({ claimed: !!meta.claimedBy, closed: true });
 
@@ -421,13 +513,16 @@ client.on('interactionCreate', async (interaction) => {
       meta.closedBy = interaction.user.id;
       meta.closedAt = Date.now();
       await writeMeta(channel, meta);
+      console.log(`${trace} SCHRITT: Meta aktualisiert`);
+      
       await lockChannelSend(channel, applicantId);
+      console.log(`${trace} SCHRITT: Channel gesperrt`);
 
       try {
         await channel.send(`🔒 <@${interaction.user.id}> **hat das Ticket geschlossen.**`);
-        console.log(`${trace} channel.send close OK`);
+        console.log(`${trace} SCHRITT: channel.send Schließung OK`);
       } catch (e) {
-        console.error(`${trace} channel.send close FAIL`, e?.code, e?.message || e);
+        console.error(`${trace} SCHRITT: channel.send Schließung FEHLGESCHLAGEN`, e?.code, e?.message || e);
       }
 
       await editOrFollowUp(interaction, 'Ticket geschlossen.', trace);
@@ -435,9 +530,10 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    console.log(`${trace} SCHRITT: Unbekannte Aktion`);
     await editOrFollowUp(interaction, 'ℹ️ Unbekannte Aktion.', trace);
   } catch (e) {
-    console.error(`${trace} Unhandled error`, e?.code, e?.message || e);
+    console.error(`${trace} ERROR:`, e?.code, e?.message || e);
     await editOrFollowUp(interaction, '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).', trace);
   } finally {
     console.timeEnd(trace);
@@ -452,7 +548,7 @@ const app = express();
 app.get('/health', (_req, res) => res.send('StarCity Bot alive'));
 app.get('/version', (_req, res) => res.json({ version: STARSTYLE_VERSION }));
 
-// Raw JSON (für HMAC)
+// Rohe JSON-Daten (für HMAC)
 app.use((req, _res, next) => {
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
@@ -478,9 +574,14 @@ function isValidSignature(rawBody, signatureHex, secret) {
    POST /whitelist
    =========================== */
 app.post('/whitelist', async (req, res) => {
+  const trace = `TRACE[webhook-${Date.now()}] WEBHOOK`;
+  console.time(trace);
+  console.log(`${trace} START`);
+  
   try {
     const sig = req.headers['x-signature'];
     if (!isValidSignature(req.rawBody, sig, process.env.WEBHOOK_SECRET)) {
+      console.log(`${trace} SCHRITT: Ungültige Signatur`);
       return res.status(401).json({ ok: false, error: 'invalid signature' });
     }
 
@@ -490,8 +591,24 @@ app.post('/whitelist', async (req, res) => {
       timezone, websiteTicketId, answers,
     } = req.body;
 
-    if (!charName) return res.status(400).json({ ok: false, error: 'charName required' });
+    if (!charName) {
+      console.log(`${trace} SCHRITT: charName fehlt`);
+      return res.status(400).json({ ok: false, error: 'charName required' });
+    }
 
+    const webhookKey = createWebhookKey(websiteTicketId, discordId, charName);
+    
+    // Idempotenz prüfen
+    const idempCheck = checkIdempotency(webhookCache, webhookKey, trace);
+    if (!idempCheck.allowed) {
+      console.log(`${trace} SCHRITT: Idempotenz-Prüfung fehlgeschlagen - ${idempCheck.reason}`);
+      return res.status(409).json({ 
+        ok: false, 
+        error: idempCheck.reason === 'inflight' ? 'Ticket wird bereits erstellt' : 'Zu viele Tickets in kurzer Zeit' 
+      });
+    }
+
+    console.log(`${trace} SCHRITT: Ticket-Channel wird erstellt`);
     const { channel, caseId } = await createTicketChannel({
       guildId: process.env.GUILD_ID,
       categoryId: process.env.TICKETS_CATEGORY_ID,
@@ -507,10 +624,15 @@ app.post('/whitelist', async (req, res) => {
       },
     });
 
+    markComplete(webhookCache, webhookKey, trace);
+    console.log(`${trace} SCHRITT: Ticket erfolgreich erstellt`);
+    
     return res.json({ ok: true, caseId, channelId: channel.id, url: `https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` });
   } catch (e) {
-    console.error('❌ /whitelist Fehler:', e?.code, e?.message || e);
+    console.error(`${trace} ERROR:`, e?.code, e?.message || e);
     return res.status(500).json({ ok: false, error: 'server error' });
+  } finally {
+    console.timeEnd(trace);
   }
 });
 

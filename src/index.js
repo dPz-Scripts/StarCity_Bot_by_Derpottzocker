@@ -17,7 +17,7 @@ import {
 /* ===========================
    VERSION & BRANDING
    =========================== */
-const STARSTYLE_VERSION = 'StarCity style v6.9';
+const STARSTYLE_VERSION = 'StarCity style v7.0 - Complete Rebuild';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
@@ -34,16 +34,19 @@ const clean = (v, fb = '—') => {
   const s = String(v).trim();
   return s.length ? s : fb;
 };
+
 const trunc = (s, n) => {
   s = clean(s, '');
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 };
+
 const makeCaseId = () => {
   const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = '';
   for (let i = 0; i < 8; i++) out += abc[Math.floor(Math.random() * abc.length)];
   return `#T-${out}`;
 };
+
 const normalizeAnswers = (raw) => {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -54,115 +57,70 @@ const normalizeAnswers = (raw) => {
     .filter((x) => x.a !== '—');
 };
 
-/* ---------- BESTÄTIGUNG/ANTWORT + TRACE ---------- */
-const toPayload = (x) => (typeof x === 'string' ? { content: x } : (x || { content: 'OK' }));
+/* ===========================
+   IDEMPOTENZ SYSTEM (NEU)
+   =========================== */
+class IdempotencyManager {
+  constructor() {
+    this.cache = new Map();
+    this.cleanupInterval = setInterval(() => this.cleanup(), 60000); // 1 Minute
+  }
 
-async function ackNow(interaction, trace) {
-  try {
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.reply({ content: '⏳ wird verarbeitet…', flags: 64 });
-      console.log(`${trace} ACK replied`);
-      return true;
+  createKey(type, guildId, userId, charName) {
+    return `${type}:${guildId}:${userId}:${charName.toLowerCase().trim()}`;
+  }
+
+  isAllowed(key) {
+    const now = Date.now();
+    const entry = this.cache.get(key);
+    
+    if (!entry) {
+      this.cache.set(key, { 
+        inflight: true, 
+        timestamp: now,
+        attempts: 1 
+      });
+      return { allowed: true, reason: 'new' };
     }
-  } catch {
-    console.log(`${trace} ACK skipped (already)`);
-  }
-  return false;
-}
-async function editOrFollowUp(interaction, payload, trace) {
-  const data = toPayload(payload);
-  try {
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(data);
-      console.log(`${trace} editReply OK`);
-    } else {
-      await interaction.reply({ ...data, flags: 64 });
-      console.log(`${trace} reply OK`);
+
+    if (entry.inflight) {
+      return { allowed: false, reason: 'inflight' };
     }
-  } catch (e) {
-    if (e?.code === 50027 || e?.status === 401) {
-      console.log(`${trace} token expired → channel.send`);
-      try { await interaction.channel?.send(data); } catch {}
-    } else if (e?.code === 40060) {
-      console.log(`${trace} already ack → followUp`);
-      try { await interaction.followUp({ ...data, flags: 64 }); } catch {}
-    } else {
-      console.error(`${trace} RESP ERROR:`, e?.code, e?.message || e);
+
+    const age = now - entry.timestamp;
+    if (age < 60000) { // 1 Minute
+      return { allowed: false, reason: 'recent', age: Math.round(age / 1000) };
     }
+
+    entry.inflight = true;
+    entry.timestamp = now;
+    entry.attempts++;
+    return { allowed: true, reason: 'retry' };
   }
-}
 
-/* ---------- IDEMPOTENZ CACHES ---------- */
-const slashCache = new Map(); // guildId:userId:charName -> { inflight: boolean, recent: timestamp }
-const webhookCache = new Map(); // websiteTicketId oder hash -> { inflight: boolean, recent: timestamp }
-
-function createSlashKey(guildId, userId, charName) {
-  // Einfacher, aber effektiver Key ohne Zeitfenster
-  return `slash:${guildId}:${userId}:${charName.toLowerCase().trim()}`;
-}
-
-function createWebhookKey(websiteTicketId, discordId, charName) {
-  if (websiteTicketId) return websiteTicketId;
-  const hash = crypto.createHash('sha256').update(`${discordId}:${charName}`).digest('hex').slice(0, 16);
-  return `hash:${hash}`;
-}
-
-function checkIdempotency(cache, key, trace) {
-  const entry = cache.get(key);
-  if (!entry) {
-    cache.set(key, { inflight: true, recent: Date.now() });
-    console.log(`${trace} IDEMPOTENZ: neue Anfrage`);
-    return { allowed: true, reason: 'new' };
-  }
-  
-  if (entry.inflight) {
-    console.log(`${trace} IDEMPOTENZ: bereits in Bearbeitung`);
-    return { allowed: false, reason: 'inflight' };
-  }
-  
-  const age = Date.now() - entry.recent;
-  if (age < 30000) { // 30 Sekunden
-    console.log(`${trace} IDEMPOTENZ: zu kürzlich (vor ${Math.round(age/1000)}s)`);
-    return { allowed: false, reason: 'recent' };
-  }
-  
-  entry.inflight = true;
-  entry.recent = Date.now();
-  console.log(`${trace} IDEMPOTENZ: erlaubt (vor ${Math.round(age/1000)}s)`);
-  return { allowed: true, reason: 'retry' };
-}
-
-function markComplete(cache, key, trace) {
-  const entry = cache.get(key);
-  if (entry) {
-    entry.inflight = false;
-    console.log(`${trace} IDEMPOTENZ: als abgeschlossen markiert`);
-  }
-}
-
-// Alte Einträge alle 10 Minuten bereinigen
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of slashCache.entries()) {
-    if (!entry.inflight && now - entry.recent > 1800000) { // 30 Minuten
-      slashCache.delete(key);
+  markComplete(key) {
+    const entry = this.cache.get(key);
+    if (entry) {
+      entry.inflight = false;
     }
   }
-  for (const [key, entry] of webhookCache.entries()) {
-    if (!entry.inflight && now - entry.recent > 1800000) { // 30 Minuten
-      webhookCache.delete(key);
+
+  cleanup() {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (!entry.inflight && now - entry.timestamp > 300000) { // 5 Minuten
+        this.cache.delete(key);
+      }
     }
   }
-}, 600000);
 
-/* ---------- DEDUPLIZIERUNG ---------- */
-const seen = new Map();
-function isDuplicate(id) {
-  if (seen.has(id)) return true;
-  seen.set(id, Date.now());
-  setTimeout(() => seen.delete(id), 120000).unref?.();
-  return false;
+  destroy() {
+    clearInterval(this.cleanupInterval);
+    this.cache.clear();
+  }
 }
+
+const idempotency = new IdempotencyManager();
 
 /* ===========================
    DISCORD CLIENT
@@ -190,9 +148,11 @@ client.login(process.env.DISCORD_TOKEN);
 process.on('unhandledRejection', (reason) => {
   console.error('UNHANDLED REJECTION:', reason?.code, reason?.message || reason);
 });
+
 process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION:', err?.code, err?.message || err);
 });
+
 client.on('error', (err) => console.error('CLIENT ERROR:', err?.code, err?.message || err));
 client.on('shardError', (err) => console.error('SHARD ERROR:', err?.code, err?.message || err));
 
@@ -233,26 +193,66 @@ function hasNeededPermsIn(channelOrId) {
 }
 
 /* ===========================
-   TICKET-UTILITIES
+   TICKET-UTILITIES (NEU)
    =========================== */
-function buildButtonsState({ claimed = false, closed = false } = {}) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('ticket_claim').setLabel('Annehmen').setEmoji('✅').setStyle(ButtonStyle.Success).setDisabled(closed || claimed),
-    new ButtonBuilder().setCustomId('ticket_close').setLabel('Schließen').setEmoji('🔒').setStyle(ButtonStyle.Secondary).setDisabled(closed),
+function buildTicketButtons({ claimed = false, closed = false } = {}) {
+  const row = new ActionRowBuilder();
+  
+  if (!closed) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId('ticket_claim')
+        .setLabel(claimed ? 'Übernommen' : 'Annehmen')
+        .setEmoji(claimed ? '✅' : '👋')
+        .setStyle(claimed ? ButtonStyle.Secondary : ButtonStyle.Success)
+        .setDisabled(claimed)
+    );
+  }
+  
+  row.addComponents(
+    new ButtonBuilder()
+      .setCustomId('ticket_close')
+      .setLabel('Schließen')
+      .setEmoji('🔒')
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(closed)
   );
+  
+  return row;
 }
 
-async function lockChannelSend(channel, applicantId) {
-  await channel.permissionOverwrites.edit(channel.guild.roles.everyone, { SendMessages: false }).catch(() => {});
-  if (applicantId) await channel.permissionOverwrites.edit(applicantId, { SendMessages: false }).catch(() => {});
-  if (!channel.name.startsWith('closed-')) await channel.setName(`closed-${channel.name}`).catch(() => {});
+async function lockChannel(channel, applicantId) {
+  try {
+    await channel.permissionOverwrites.edit(channel.guild.roles.everyone, { SendMessages: false });
+    if (applicantId) {
+      await channel.permissionOverwrites.edit(applicantId, { SendMessages: false });
+    }
+    if (!channel.name.startsWith('closed-')) {
+      await channel.setName(`closed-${channel.name}`);
+    }
+  } catch (error) {
+    console.error('Fehler beim Sperren des Channels:', error);
+  }
 }
 
-function readMeta(channel) { try { return JSON.parse(channel.topic || '{}'); } catch { return {}; } }
-async function writeMeta(channel, meta) { await channel.setTopic(JSON.stringify(meta)).catch(() => {}); }
+function readTicketMeta(channel) {
+  try {
+    return JSON.parse(channel.topic || '{}');
+  } catch {
+    return {};
+  }
+}
+
+async function writeTicketMeta(channel, meta) {
+  try {
+    await channel.setTopic(JSON.stringify(meta));
+  } catch (error) {
+    console.error('Fehler beim Speichern der Meta-Daten:', error);
+  }
+}
 
 /* ===========================
-   TICKET-CHANNEL (StarCity Style + Buttons)
+   TICKET-CHANNEL ERSTELLUNG (NEU)
    =========================== */
 async function createTicketChannel({
   guildId,
@@ -292,14 +292,18 @@ async function createTicketChannel({
   const channelName = `whitelist-${safeName}-${shortId}`;
   const caseId = makeCaseId();
 
-  // Berechtigungsüberschreibungen – Bot inkl. ManageChannels
+  // Berechtigungsüberschreibungen
   const overwrites = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
     { id: staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
     { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
   ];
+  
   if (applicantDiscordId) {
-    overwrites.push({ id: applicantDiscordId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
+    overwrites.push({ 
+      id: applicantDiscordId, 
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] 
+    });
   }
 
   const channel = await guild.channels.create({
@@ -316,258 +320,242 @@ async function createTicketChannel({
     createdAt: Date.now(),
     claimedBy: null,
     claimedAt: null,
-    originalMessageId: null,
     closedBy: null,
     closedAt: null,
+    status: 'open'
   };
-  await writeMeta(channel, meta);
+  
+  await writeTicketMeta(channel, meta);
 
+  // Verbessertes Embed-Design
   const embed = new EmbedBuilder()
     .setColor(BRAND.color)
-    .setTitle('📨 Whitelist-Ticket eröffnet')
+    .setTitle('🎫 Whitelist-Ticket eröffnet')
     .setDescription([
-      '**Herzlich Willkommen auf StarCity!**',
-      'Schön, dass du dich für unser Projekt interessierst.',
-      'Hier ist die Zusammenfassung deiner Bewerbung:',
+      '**Willkommen bei StarCity!**',
       '',
-      '*(Unser Team meldet sich zeitnah bei dir. Bitte bleib in diesem Ticket.)*',
+      'Deine Bewerbung wurde erfolgreich eingereicht. Unser Team wird sich zeitnah bei dir melden.',
+      '',
+      '**Bitte bleib in diesem Ticket und warte auf eine Antwort.**',
     ].join('\n'))
-    .setFooter({ text: `${caseId} • Kategorie: Whitelist` })
+    .setFooter({ text: `${caseId} • Status: Offen` })
     .setTimestamp();
 
-  if (BRAND.icon) embed.setAuthor({ name: BRAND.name, iconURL: BRAND.icon }); else embed.setAuthor({ name: BRAND.name });
-  if (BRAND.icon) embed.setThumbnail(BRAND.icon);
-  if (BRAND.banner) embed.setImage(BRAND.banner);
+  if (BRAND.icon) {
+    embed.setAuthor({ name: BRAND.name, iconURL: BRAND.icon });
+    embed.setThumbnail(BRAND.icon);
+  } else {
+    embed.setAuthor({ name: BRAND.name });
+  }
+  
+  if (BRAND.banner) {
+    embed.setImage(BRAND.banner);
+  }
 
   const bewerberText = applicantDiscordId ? `<@${applicantDiscordId}> (${clean(form.discordTag || applicantTag)})` : clean(form.discordTag || applicantTag);
 
+  // Verbesserte Feld-Darstellung
   embed.addFields(
-    { name: 'Bewerber', value: trunc(bewerberText, 256), inline: false },
-    { name: 'Charakter', value: trunc(form.charName, 128) || '—', inline: true },
-    { name: 'Alter', value: form.alter ? String(form.alter) : '—', inline: true },
-    { name: 'Steam Hex', value: trunc(form.steamHex, 64) || '—', inline: true },
-    { name: 'Discord', value: trunc(form.discordTag, 128) || '—', inline: true },
-    { name: 'Zeitzone', value: trunc(form.timezone, 64) || '—', inline: true },
-    { name: 'Wie gefunden', value: trunc(form.howFound, 1024) || '—', inline: false },
-    { name: 'Schreibtisch-Item', value: trunc(form.deskItem, 1024) || '—', inline: false },
+    { name: '👤 Bewerber', value: trunc(bewerberText, 256), inline: false },
+    { name: '🎭 Charakter', value: trunc(form.charName, 128) || '—', inline: true },
+    { name: '🎂 Alter', value: form.alter ? String(form.alter) : '—', inline: true },
+    { name: '🆔 Steam Hex', value: trunc(form.steamHex, 64) || '—', inline: true },
+    { name: '💬 Discord', value: trunc(form.discordTag, 128) || '—', inline: true },
+    { name: '🌍 Zeitzone', value: trunc(form.timezone, 64) || '—', inline: true },
   );
 
-  const qa = normalizeAnswers(form.answers);
-  for (let i = 0; i < qa.length && i < 12; i++) {
-    embed.addFields({ name: trunc(`Frage ${i + 1}: ${qa[i].q}`, 256), value: trunc(qa[i].a, 1024), inline: false });
+  if (form.howFound) {
+    embed.addFields({ name: '🔍 Wie gefunden', value: trunc(form.howFound, 1024), inline: false });
+  }
+  
+  if (form.deskItem) {
+    embed.addFields({ name: '🖥️ Schreibtisch-Item', value: trunc(form.deskItem, 1024), inline: false });
   }
 
-  // Embed + Buttons
+  const qa = normalizeAnswers(form.answers);
+  for (let i = 0; i < qa.length && i < 10; i++) {
+    embed.addFields({ 
+      name: `❓ Frage ${i + 1}: ${trunc(qa[i].q, 200)}`, 
+      value: trunc(qa[i].a, 1024), 
+      inline: false 
+    });
+  }
+
   const sent = await channel.send({
-    content: `<@&${process.env.STAFF_ROLE_ID}> Neues Ticket`,
+    content: `<@&${process.env.STAFF_ROLE_ID}> 🎫 Neues Whitelist-Ticket`,
     embeds: [embed],
-    components: [buildButtonsState()],
+    components: [buildTicketButtons()],
     allowedMentions: { roles: [process.env.STAFF_ROLE_ID] },
   });
 
   meta.originalMessageId = sent.id;
-  await writeMeta(channel, meta);
+  await writeTicketMeta(channel, meta);
 
   return { channel, caseId, messageId: sent.id };
 }
 
 /* ===========================
-   INTERAKTIONEN (Slash + Buttons)
+   INTERAKTIONEN (SLASH + BUTTONS) - NEU
    =========================== */
 client.on('interactionCreate', async (interaction) => {
-  const traceBase = `TRACE[${interaction.id}]`;
-  if (isDuplicate(interaction.id)) { console.log(`${traceBase} DEDUPED`); return; }
-
-  // SLASH
-  if (interaction.isChatInputCommand()) {
-    if (interaction.commandName !== 'ticket-test') return;
-    const trace = `${traceBase} SLASH`;
-    console.time(trace);
-    console.log(`${trace} START by ${interaction.user?.tag || interaction.user?.id}`);
-    
-    await ackNow(interaction, trace);
-    
-    const charName = interaction.options.getString('charname', true);
-    const slashKey = createSlashKey(process.env.GUILD_ID, interaction.user.id, charName);
-    
-    console.log(`${trace} SCHRITT: Cache-Key erstellt: ${slashKey}`);
-    
-    // Idempotenz prüfen - aber nur für sehr kurze Zeit (30 Sekunden)
-    const idempCheck = checkIdempotency(slashCache, slashKey, trace);
-    if (!idempCheck.allowed) {
-      const reason = idempCheck.reason === 'inflight' ? 'Ticket wird bereits erstellt...' : 'Zu viele Tickets in kurzer Zeit. Bitte warte 30 Sekunden.';
-      await editOrFollowUp(interaction, `⚠️ ${reason}`, trace);
-      console.timeEnd(trace);
-      return;
-    }
-    
-    try {
-      console.log(`${trace} SCHRITT: Ticket-Channel wird erstellt`);
-      const { channel } = await createTicketChannel({
-        guildId: process.env.GUILD_ID,
-        categoryId: process.env.TICKETS_CATEGORY_ID,
-        staffRoleId: process.env.STAFF_ROLE_ID,
-        applicantDiscordId: interaction.user.id,
-        applicantTag: `${interaction.user.username}`,
-        form: {
-          charName,
-          alter: 19,
-          steamHex: '110000112345678',
-          discordTag: `${interaction.user.username}`,
-          howFound: 'Über einen Freund',
-          deskItem: 'Kaffee & Notizbuch',
-          timezone: 'Europe/Berlin',
-          websiteTicketId: 'SC-TEST-001',
-          answers: [
-            { question: 'Woran kannst du dich erinnern, wenn dir ein Medic geholfen hat?', answer: 'Nicht an Details der Verletzung.' },
-            { question: 'Darf der FiveM-Account geteilt werden?', answer: 'Nein.' },
-            { question: 'Max. Mitglieder in einer Fraktion?', answer: '10' },
-          ],
-        },
-      });
-      
-      console.log(`${trace} SCHRITT: Ticket erfolgreich erstellt`);
-      await editOrFollowUp(interaction, `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`, trace);
-    } catch (e) {
-      console.error(`${trace} ERROR:`, e?.code, e?.message || e);
-      await editOrFollowUp(interaction, '❌ Konnte Ticket nicht erstellen (Details in Logs).', trace);
-    } finally {
-      // WICHTIG: markComplete IMMER aufrufen, auch bei Fehlern
-      markComplete(slashCache, slashKey, trace);
-      console.timeEnd(trace);
-    }
-    return;
-  }
-
-  // BUTTONS
-  if (!interaction.isButton()) return;
-  const trace = `${traceBase} BTN:${interaction.customId}`;
-  console.time(trace);
-  console.log(`${trace} START by ${interaction.user?.tag || interaction.user?.id} in #${interaction.channel?.id}`);
+  const traceId = interaction.id;
+  const startTime = Date.now();
+  
+  console.log(`[${traceId}] ${interaction.type} by ${interaction.user?.tag || interaction.user?.id}`);
 
   try {
-    const staffRoleId = process.env.STAFF_ROLE_ID;
-    if (!staffRoleId) { 
-      console.log(`${trace} SCHRITT: STAFF_ROLE_ID fehlt`);
-      await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht gesetzt.', ephemeral: true });
-      return; 
-    }
+    // SLASH COMMANDS
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName !== 'ticket-test') return;
+      
+      const charName = interaction.options.getString('charname', true);
+      const key = idempotency.createKey('slash', process.env.GUILD_ID, interaction.user.id, charName);
+      
+      // Idempotenz prüfen
+      const check = idempotency.isAllowed(key);
+      if (!check.allowed) {
+        const message = check.reason === 'inflight' 
+          ? '⏳ Ticket wird bereits erstellt...' 
+          : `⏳ Zu viele Tickets in kurzer Zeit. Bitte warte ${check.age || 60} Sekunden.`;
+        
+        await interaction.reply({ content: message, ephemeral: true });
+        return;
+      }
 
-    const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
-    if (!isStaff) { 
-      console.log(`${trace} SCHRITT: Benutzer ist kein Staff`);
-      await interaction.reply({ content: '❌ Nur Staff darf diese Aktion nutzen.', ephemeral: true });
-      return; 
-    }
+      // ACK senden
+      await interaction.reply({ content: '⏳ Ticket wird erstellt...', ephemeral: true });
 
-    const channel = interaction.channel;
-    const meta = readMeta(channel) || {};
-    const applicantId = meta.applicantDiscordId || null;
+      try {
+        const { channel } = await createTicketChannel({
+          guildId: process.env.GUILD_ID,
+          categoryId: process.env.TICKETS_CATEGORY_ID,
+          staffRoleId: process.env.STAFF_ROLE_ID,
+          applicantDiscordId: interaction.user.id,
+          applicantTag: interaction.user.username,
+          form: {
+            charName,
+            alter: 19,
+            steamHex: '110000112345678',
+            discordTag: interaction.user.username,
+            howFound: 'Über einen Freund',
+            deskItem: 'Kaffee & Notizbuch',
+            timezone: 'Europe/Berlin',
+            websiteTicketId: 'SC-TEST-001',
+            answers: [
+              { question: 'Woran kannst du dich erinnern, wenn dir ein Medic geholfen hat?', answer: 'Nicht an Details der Verletzung.' },
+              { question: 'Darf der FiveM-Account geteilt werden?', answer: 'Nein.' },
+              { question: 'Max. Mitglieder in einer Fraktion?', answer: '10' },
+            ],
+          },
+        });
 
-    // Berechtigungen prüfen
-    const botPerms = channel.permissionsFor(interaction.guild.members.me);
-    if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
-      console.error(`${trace} SCHRITT: ManageChannels-Berechtigung fehlt`);
-      await interaction.reply({ content: '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.', ephemeral: true });
+        await interaction.editReply({ 
+          content: `✅ Ticket erfolgreich erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` 
+        });
+        
+      } catch (error) {
+        console.error(`[${traceId}] Ticket-Erstellung fehlgeschlagen:`, error);
+        await interaction.editReply({ content: '❌ Fehler beim Erstellen des Tickets. Bitte versuche es erneut.' });
+      } finally {
+        idempotency.markComplete(key);
+      }
+      
       return;
     }
 
-    // *** SOFORT: Buttons am geklickten Embed aktualisieren ***
-    const setButtonsOnMessage = async (state) => {
-      try {
-        await interaction.message.edit({ components: [buildButtonsState(state)] });
-        console.log(`${trace} SCHRITT: Buttons auf interaction.message aktualisiert OK`);
-      } catch (e) {
-        console.error(`${trace} SCHRITT: Button-Update auf interaction.message FEHLGESCHLAGEN`, e?.code, e?.message || e);
+    // BUTTON INTERACTIONS
+    if (interaction.isButton()) {
+      const staffRoleId = process.env.STAFF_ROLE_ID;
+      if (!staffRoleId) {
+        await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht konfiguriert.', ephemeral: true });
+        return;
       }
-    };
 
-    if (interaction.customId === 'ticket_claim') {
-      console.log(`${trace} SCHRITT: Übernahme wird verarbeitet`);
+      const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
+      if (!isStaff) {
+        await interaction.reply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.', ephemeral: true });
+        return;
+      }
+
+      const channel = interaction.channel;
+      const meta = readTicketMeta(channel);
       
-      // UI sofort anpassen
-      await setButtonsOnMessage({ claimed: true, closed: false });
-
-      // Meta + sichtbare Info
-      meta.claimedBy = interaction.user.id;
-      meta.claimedAt = Date.now();
-      await writeMeta(channel, meta);
-      console.log(`${trace} SCHRITT: Meta aktualisiert`);
-
-      try {
-        await channel.send(`✅ <@${interaction.user.id}> **hat das Ticket übernommen.**`);
-        console.log(`${trace} SCHRITT: channel.send Übernahme OK`);
-      } catch (e) {
-        console.error(`${trace} SCHRITT: channel.send Übernahme FEHLGESCHLAGEN`, e?.code, e?.message || e);
+      if (!meta.caseId) {
+        await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', ephemeral: true });
+        return;
       }
 
-      // Ephemere Antwort für den Staff-Mitglied
-      try {
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({ content: '✅ Übernahme bestätigt.', ephemeral: true });
-          console.log(`${trace} SCHRITT: Ephemere Antwort gesendet`);
-        } else {
-          await interaction.followUp({ content: '✅ Übernahme bestätigt.', ephemeral: true });
-          console.log(`${trace} SCHRITT: FollowUp gesendet`);
+      // Berechtigungen prüfen
+      const botPerms = channel.permissionsFor(interaction.guild.members.me);
+      if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
+        await interaction.reply({ content: '❌ Mir fehlen die nötigen Berechtigungen.', ephemeral: true });
+        return;
+      }
+
+      if (interaction.customId === 'ticket_claim') {
+        if (meta.claimedBy) {
+          await interaction.reply({ content: '⚠️ Dieses Ticket wurde bereits übernommen.', ephemeral: true });
+          return;
         }
-      } catch (e) {
-        console.error(`${trace} SCHRITT: Ephemere Antwort FEHLGESCHLAGEN`, e?.code, e?.message || e);
+
+        // Buttons sofort aktualisieren
+        await interaction.message.edit({ 
+          components: [buildTicketButtons({ claimed: true, closed: false })] 
+        });
+
+        // Meta aktualisieren
+        meta.claimedBy = interaction.user.id;
+        meta.claimedAt = Date.now();
+        meta.status = 'claimed';
+        await writeTicketMeta(channel, meta);
+
+        // Channel-Nachricht
+        await channel.send(`✅ **Ticket übernommen**\n<@${interaction.user.id}> hat das Ticket übernommen und wird sich um deine Bewerbung kümmern.`);
+
+        // Ephemere Bestätigung
+        await interaction.reply({ content: '✅ Ticket erfolgreich übernommen!', ephemeral: true });
+        
+        return;
       }
-      
-      console.timeEnd(trace);
-      return;
+
+      if (interaction.customId === 'ticket_close') {
+        // Buttons sofort aktualisieren
+        await interaction.message.edit({ 
+          components: [buildTicketButtons({ claimed: !!meta.claimedBy, closed: true })] 
+        });
+
+        // Meta aktualisieren
+        meta.closedBy = interaction.user.id;
+        meta.closedAt = Date.now();
+        meta.status = 'closed';
+        await writeTicketMeta(channel, meta);
+
+        // Channel sperren
+        await lockChannel(channel, meta.applicantDiscordId);
+
+        // Channel-Nachricht
+        await channel.send(`🔒 **Ticket geschlossen**\n<@${interaction.user.id}> hat das Ticket geschlossen.`);
+
+        // Ephemere Bestätigung
+        await interaction.reply({ content: '🔒 Ticket erfolgreich geschlossen!', ephemeral: true });
+        
+        return;
+      }
     }
 
-    if (interaction.customId === 'ticket_close') {
-      console.log(`${trace} SCHRITT: Schließung wird verarbeitet`);
-      
-      // UI sofort anpassen
-      await setButtonsOnMessage({ claimed: !!meta.claimedBy, closed: true });
-
-      // Meta + Sperren
-      meta.closedBy = interaction.user.id;
-      meta.closedAt = Date.now();
-      await writeMeta(channel, meta);
-      console.log(`${trace} SCHRITT: Meta aktualisiert`);
-      
-      await lockChannelSend(channel, applicantId);
-      console.log(`${trace} SCHRITT: Channel gesperrt`);
-
+  } catch (error) {
+    console.error(`[${traceId}] Unerwarteter Fehler:`, error);
+    
+    if (!interaction.replied && !interaction.deferred) {
       try {
-        await channel.send(`🔒 <@${interaction.user.id}> **hat das Ticket geschlossen.**`);
-        console.log(`${trace} SCHRITT: channel.send Schließung OK`);
-      } catch (e) {
-        console.error(`${trace} SCHRITT: channel.send Schließung FEHLGESCHLAGEN`, e?.code, e?.message || e);
+        await interaction.reply({ content: '❌ Ein unerwarteter Fehler ist aufgetreten.', ephemeral: true });
+      } catch (replyError) {
+        console.error(`[${traceId}] Reply-Fehler:`, replyError);
       }
-
-      // Ephemere Antwort für den Staff-Mitglied
-      try {
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({ content: '🔒 Ticket geschlossen.', ephemeral: true });
-          console.log(`${trace} SCHRITT: Ephemere Antwort gesendet`);
-        } else {
-          await interaction.followUp({ content: '🔒 Ticket geschlossen.', ephemeral: true });
-          console.log(`${trace} SCHRITT: FollowUp gesendet`);
-        }
-      } catch (e) {
-        console.error(`${trace} SCHRITT: Ephemere Antwort FEHLGESCHLAGEN`, e?.code, e?.message || e);
-      }
-      
-      console.timeEnd(trace);
-      return;
-    }
-
-    console.log(`${trace} SCHRITT: Unbekannte Aktion`);
-    await interaction.reply({ content: 'ℹ️ Unbekannte Aktion.', ephemeral: true });
-  } catch (e) {
-    console.error(`${trace} ERROR:`, e?.code, e?.message || e);
-    try {
-      await interaction.reply({ content: '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).', ephemeral: true });
-    } catch (replyError) {
-      console.error(`${trace} REPLY ERROR:`, replyError?.code, replyError?.message || replyError);
     }
   } finally {
-    console.timeEnd(trace);
+    const duration = Date.now() - startTime;
+    console.log(`[${traceId}] Abgeschlossen in ${duration}ms`);
   }
 });
 
@@ -605,14 +593,13 @@ function isValidSignature(rawBody, signatureHex, secret) {
    POST /whitelist
    =========================== */
 app.post('/whitelist', async (req, res) => {
-  const trace = `TRACE[webhook-${Date.now()}] WEBHOOK`;
-  console.time(trace);
-  console.log(`${trace} START`);
+  const traceId = `webhook-${Date.now()}`;
+  console.log(`[${traceId}] Webhook-Anfrage erhalten`);
   
   try {
     const sig = req.headers['x-signature'];
     if (!isValidSignature(req.rawBody, sig, process.env.WEBHOOK_SECRET)) {
-      console.log(`${trace} SCHRITT: Ungültige Signatur`);
+      console.log(`[${traceId}] Ungültige Signatur`);
       return res.status(401).json({ ok: false, error: 'invalid signature' });
     }
 
@@ -623,23 +610,23 @@ app.post('/whitelist', async (req, res) => {
     } = req.body;
 
     if (!charName) {
-      console.log(`${trace} SCHRITT: charName fehlt`);
+      console.log(`[${traceId}] charName fehlt`);
       return res.status(400).json({ ok: false, error: 'charName required' });
     }
 
-    const webhookKey = createWebhookKey(websiteTicketId, discordId, charName);
+    const key = idempotency.createKey('webhook', websiteTicketId || discordId, discordId, charName);
     
     // Idempotenz prüfen
-    const idempCheck = checkIdempotency(webhookCache, webhookKey, trace);
-    if (!idempCheck.allowed) {
-      console.log(`${trace} SCHRITT: Idempotenz-Prüfung fehlgeschlagen - ${idempCheck.reason}`);
+    const check = idempotency.isAllowed(key);
+    if (!check.allowed) {
+      console.log(`[${traceId}] Idempotenz-Prüfung fehlgeschlagen: ${check.reason}`);
       return res.status(409).json({ 
         ok: false, 
-        error: idempCheck.reason === 'inflight' ? 'Ticket wird bereits erstellt' : 'Zu viele Tickets in kurzer Zeit' 
+        error: check.reason === 'inflight' ? 'Ticket wird bereits erstellt' : 'Zu viele Tickets in kurzer Zeit' 
       });
     }
 
-    console.log(`${trace} SCHRITT: Ticket-Channel wird erstellt`);
+    console.log(`[${traceId}] Ticket-Channel wird erstellt`);
     const { channel, caseId } = await createTicketChannel({
       guildId: process.env.GUILD_ID,
       categoryId: process.env.TICKETS_CATEGORY_ID,
@@ -655,16 +642,20 @@ app.post('/whitelist', async (req, res) => {
       },
     });
 
-    console.log(`${trace} SCHRITT: Ticket erfolgreich erstellt`);
+    console.log(`[${traceId}] Ticket erfolgreich erstellt`);
     
-    return res.json({ ok: true, caseId, channelId: channel.id, url: `https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` });
-  } catch (e) {
-    console.error(`${trace} ERROR:`, e?.code, e?.message || e);
+    return res.json({ 
+      ok: true, 
+      caseId, 
+      channelId: channel.id, 
+      url: `https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` 
+    });
+    
+  } catch (error) {
+    console.error(`[${traceId}] Webhook-Fehler:`, error);
     return res.status(500).json({ ok: false, error: 'server error' });
   } finally {
-    // WICHTIG: markComplete IMMER aufrufen, auch bei Fehlern
-    markComplete(webhookCache, webhookKey, trace);
-    console.timeEnd(trace);
+    idempotency.markComplete(key);
   }
 });
 
@@ -674,4 +665,11 @@ app.post('/whitelist', async (req, res) => {
 const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {
   console.log(`🌐 Webhook-Server läuft auf Port ${PORT}`);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('🛑 Shutdown signal empfangen...');
+  idempotency.destroy();
+  process.exit(0);
 });

@@ -17,7 +17,7 @@ import {
 /* ===========================
    VERSION & BRAND
    =========================== */
-const STARSTYLE_VERSION = 'StarCity style v6.6';
+const STARSTYLE_VERSION = 'StarCity style v6.7';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
@@ -54,22 +54,21 @@ const normalizeAnswers = (raw) => {
     .filter((x) => x.a !== '—');
 };
 
-// ---------- Antwort-Helfer ----------
+/* ---------- ACK & RESPONSE ---------- */
 const toPayload = (x) => (typeof x === 'string' ? { content: x } : (x || { content: 'OK' }));
 
-// ackNow: sofortiges, ephemeres Ack (verhindert Spinner). Gibt "replied" zurück, wenn geantwortet wurde.
 async function ackNow(interaction) {
   try {
     if (!interaction.deferred && !interaction.replied) {
       await interaction.reply({ content: '⏳ …', flags: 64 });
-      return 'replied';
+      console.log('ACK: replied (ephemeral) for', interaction.id);
+      return true;
     }
   } catch (e) {
-    // already acknowledged → ignorieren
+    console.log('ACK: skip (already acked)', interaction.id);
   }
-  return 'noop';
+  return false;
 }
-
 async function editOrFollowUp(interaction, payload) {
   const data = toPayload(payload);
   try {
@@ -87,6 +86,16 @@ async function editOrFollowUp(interaction, payload) {
       console.error('RESP ERROR:', e?.code, e?.message || e);
     }
   }
+}
+
+/* ---------- DEDUPE: Interaction-IDs ---------- */
+const seen = new Map(); // id -> timestamp
+function isDuplicate(interactionId) {
+  if (seen.has(interactionId)) return true;
+  seen.set(interactionId, Date.now());
+  // nach 2 Minuten rauswerfen
+  setTimeout(() => seen.delete(interactionId), 120000).unref?.();
+  return false;
 }
 
 /* ===========================
@@ -303,11 +312,16 @@ async function createTicketChannel({
    INTERACTIONS (Slash + Buttons)
    =========================== */
 client.on('interactionCreate', async (interaction) => {
+  // DEDUPE: jede Interaction nur 1x verarbeiten
+  if (isDuplicate(interaction.id)) {
+    console.log('DEDUPED:', interaction.id, interaction.customId || interaction.commandName || 'unknown');
+    return;
+  }
+
   // Slash
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName !== 'ticket-test') return;
 
-    // sofort acken
     await ackNow(interaction);
     try {
       const charName = interaction.options.getString('charname', true);
@@ -344,18 +358,14 @@ client.on('interactionCreate', async (interaction) => {
   // Buttons
   if (!interaction.isButton()) return;
 
-  // — Logging: wer/wo/was —
-  try {
-    console.log(
-      `BTN: click ${interaction.customId} by ${interaction.user?.tag || interaction.user?.id} in #${interaction.channel?.id} (replied:${interaction.replied} deferred:${interaction.deferred})`
-    );
-  } catch {}
+  console.log(
+    `BTN: click ${interaction.customId} by ${interaction.user?.tag || interaction.user?.id} in #${interaction.channel?.id} (replied:${interaction.replied} deferred:${interaction.deferred})`
+  );
 
   try {
     const staffRoleId = process.env.STAFF_ROLE_ID;
     if (!staffRoleId) { await editOrFollowUp(interaction, '⚠️ STAFF_ROLE_ID nicht gesetzt.'); return; }
 
-    // sofort ack (⏳)
     await ackNow(interaction);
 
     // Staff-Check
@@ -368,8 +378,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // Bot-Rechte
     const botPerms = channel.permissionsFor(interaction.guild.members.me);
-    const hasManage = !!botPerms?.has(PermissionFlagsBits.ManageChannels);
-    if (!hasManage) {
+    if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
       console.error('BTN: fehlende Rechte ManageChannels in', channel.id);
       await editOrFollowUp(interaction, '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.');
       return;

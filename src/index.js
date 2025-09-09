@@ -14,13 +14,13 @@ import {
 /* ===========================
    VERSION & BRAND
    =========================== */
-const STARSTYLE_VERSION = 'StarCity style v3';
+const STARSTYLE_VERSION = 'StarCity style v4';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
   color: parseInt((process.env.BRAND_COLOR || '00A2FF').replace('#', ''), 16),
-  icon: process.env.BRAND_ICON_URL || null,     // https://.../icon.png
-  banner: process.env.BRAND_BANNER_URL || null, // https://.../banner.png
+  icon: process.env.BRAND_ICON_URL || null,
+  banner: process.env.BRAND_BANNER_URL || null,
 };
 
 const clean = (v, fb = '—') => {
@@ -37,6 +37,18 @@ const makeCaseId = () => {
   let out = '';
   for (let i = 0; i < 8; i++) out += abc[Math.floor(Math.random() * abc.length)];
   return `#T-${out}`;
+};
+// Antworten in ein einheitliches Format bringen
+const normalizeAnswers = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((x, i) => {
+      // akzeptiere {question, answer} ODER {key, value} ODER {id, answer}
+      const q = x.question ?? x.key ?? x.id ?? `Frage ${i + 1}`;
+      const a = x.answer ?? x.value ?? '';
+      return { q: clean(q), a: clean(a) };
+    })
+    .filter((x) => x.a !== '—');
 };
 
 /* ===========================
@@ -112,7 +124,7 @@ async function createTicketChannel({
     howFound: '',
     deskItem: '',
     timezone: '',
-    answers: [],      // [{question, answer}] ODER [{key, value}]
+    answers: [],      // [{question, answer}] / [{key, value}] / [{id, answer}]
     websiteTicketId: null,
   },
 }) {
@@ -193,11 +205,13 @@ async function createTicketChannel({
     { name: 'Schreibtisch-Item', value: trunc(form.deskItem, 1024) || '—', inline: false },
   );
 
-  const qa = Array.isArray(form.answers) ? form.answers : [];
+  const qa = normalizeAnswers(form.answers);
   for (let i = 0; i < qa.length && i < 12; i++) {
-    const q = clean(qa[i].question || qa[i].key, `Frage ${i + 1}`);
-    const a = clean(qa[i].answer || qa[i].value, '—');
-    embed.addFields({ name: trunc(`Frage ${i + 1}: ${q}`, 256), value: trunc(a, 1024), inline: false });
+    embed.addFields({
+      name: trunc(`Frage ${i + 1}: ${qa[i].q}`, 256),
+      value: trunc(qa[i].a, 1024),
+      inline: false,
+    });
   }
 
   await channel.send({
@@ -210,18 +224,17 @@ async function createTicketChannel({
 }
 
 /* ===========================
-   SLASH HANDLER (fix: nur 1x ack)
+   SLASH HANDLER (nur 1x ack)
    =========================== */
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName !== 'ticket-test') return;
 
-  // **Nur EIN mal bestätigen**
   try {
     await interaction.deferReply({ flags: 64 }); // EPHEMERAL
   } catch (e) {
     console.error('❌ deferReply fehlgeschlagen:', e?.code, e?.message);
-    return; // nicht nochmal reply versuchen -> sonst 40060
+    return;
   }
 
   try {
@@ -233,7 +246,6 @@ client.on('interactionCreate', async (interaction) => {
       staffRoleId: process.env.STAFF_ROLE_ID,
       applicantDiscordId: interaction.user.id,
       applicantTag: `${interaction.user.username}`,
-      // Demo-Felder für sofortige Vorschau
       form: {
         charName,
         alter: 19,
@@ -296,7 +308,7 @@ function isValidSignature(rawBody, signatureHex, secret) {
 }
 
 /* ===========================
-   POST /whitelist
+   POST /whitelist  (robustes Mapping)
    =========================== */
 app.post('/whitelist', async (req, res) => {
   try {
@@ -305,20 +317,24 @@ app.post('/whitelist', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'invalid signature' });
     }
 
+    // Unterstütze beide Feldnamen: erfahrung/howFound und motivation/deskItem
     const {
       discordId,
       discordTag,
       charName,
       steamHex,
       alter,
-      erfahrung,        // „Wie gefunden“
-      motivation,       // „Schreibtisch-Item“
+      erfahrung,
+      howFound,
+      motivation,
+      deskItem,
       timezone,
       websiteTicketId,
-      answers,          // [{question, answer}] ODER [{key, value}]
+      answers,
     } = req.body;
 
-    if (!charName) return res.status(400).json({ ok: false, error: 'charName required' });
+    if (!charName)
+      return res.status(400).json({ ok: false, error: 'charName required' });
 
     const { channel, caseId } = await createTicketChannel({
       guildId: process.env.GUILD_ID,
@@ -331,11 +347,11 @@ app.post('/whitelist', async (req, res) => {
         alter,
         steamHex,
         discordTag,
-        howFound: erfahrung,
-        deskItem: motivation,
+        howFound: erfahrung ?? howFound ?? '',
+        deskItem: motivation ?? deskItem ?? '',
         timezone,
         websiteTicketId,
-        answers: Array.isArray(answers) ? answers : [],
+        answers: normalizeAnswers(answers),
       },
     });
 

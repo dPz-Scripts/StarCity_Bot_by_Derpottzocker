@@ -1,8 +1,8 @@
 {
   "name": "starcity-bot-by-derpottzocker",
   "version": "1.0.0",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js"

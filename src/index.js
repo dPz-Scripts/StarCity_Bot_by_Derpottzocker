@@ -9,12 +9,15 @@ import {
   ChannelType,
   PermissionFlagsBits,
   EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } from 'discord.js';
 
 /* ===========================
    VERSION & BRAND
    =========================== */
-const STARSTYLE_VERSION = 'StarCity style v4';
+const STARSTYLE_VERSION = 'StarCity style v6';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
@@ -23,6 +26,9 @@ const BRAND = {
   banner: process.env.BRAND_BANNER_URL || null,
 };
 
+/* ===========================
+   HELPERS
+   =========================== */
 const clean = (v, fb = '—') => {
   if (v === null || v === undefined) return fb;
   const s = String(v).trim();
@@ -38,16 +44,13 @@ const makeCaseId = () => {
   for (let i = 0; i < 8; i++) out += abc[Math.floor(Math.random() * abc.length)];
   return `#T-${out}`;
 };
-// Antworten in ein einheitliches Format bringen
 const normalizeAnswers = (raw) => {
   if (!Array.isArray(raw)) return [];
   return raw
-    .map((x, i) => {
-      // akzeptiere {question, answer} ODER {key, value} ODER {id, answer}
-      const q = x.question ?? x.key ?? x.id ?? `Frage ${i + 1}`;
-      const a = x.answer ?? x.value ?? '';
-      return { q: clean(q), a: clean(a) };
-    })
+    .map((x, i) => ({
+      q: clean(x?.question ?? x?.key ?? x?.id ?? `Frage ${i + 1}`),
+      a: clean(x?.answer ?? x?.value ?? ''),
+    }))
     .filter((x) => x.a !== '—');
 };
 
@@ -88,7 +91,7 @@ async function registerSlashCommands() {
 }
 
 /* ===========================
-   PERMISSION CHECK (optional)
+   PERMISSIONS (optional)
    =========================== */
 function hasNeededPermsIn(channelOrId) {
   try {
@@ -108,7 +111,50 @@ function hasNeededPermsIn(channelOrId) {
 }
 
 /* ===========================
-   TICKET-CHANNEL (StarCity Style)
+   TICKET-UTILS
+   =========================== */
+function buildButtonsState({ claimed = false, closed = false } = {}) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('ticket_claim')
+      .setLabel('Annehmen')
+      .setEmoji('✅')
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(closed || claimed),
+    new ButtonBuilder()
+      .setCustomId('ticket_close')
+      .setLabel('Schließen')
+      .setEmoji('🔒')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(closed)
+  );
+}
+
+async function lockChannelSend(channel, applicantId) {
+  await channel.permissionOverwrites
+    .edit(channel.guild.roles.everyone, { SendMessages: false })
+    .catch(() => {});
+  if (applicantId) {
+    await channel.permissionOverwrites.edit(applicantId, { SendMessages: false }).catch(() => {});
+  }
+  if (!channel.name.startsWith('closed-')) {
+    await channel.setName(`closed-${channel.name}`).catch(() => {});
+  }
+}
+
+function readMeta(channel) {
+  try {
+    return JSON.parse(channel.topic || '{}');
+  } catch {
+    return {};
+  }
+}
+async function writeMeta(channel, meta) {
+  await channel.setTopic(JSON.stringify(meta)).catch(() => {});
+}
+
+/* ===========================
+   TICKET-CHANNEL (StarCity Style + Buttons)
    =========================== */
 async function createTicketChannel({
   guildId,
@@ -124,7 +170,7 @@ async function createTicketChannel({
     howFound: '',
     deskItem: '',
     timezone: '',
-    answers: [],      // [{question, answer}] / [{key, value}] / [{id, answer}]
+    answers: [],
     websiteTicketId: null,
   },
 }) {
@@ -158,35 +204,46 @@ async function createTicketChannel({
     overwrites.push({ id: applicantDiscordId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
   }
 
-  let channel;
-  try {
-    channel = await guild.channels.create({
-      name: channelName,
-      type: ChannelType.GuildText,
-      parent,
-      permissionOverwrites: overwrites,
-      reason: `Whitelist-Ticket für ${applicantTag || applicantDiscordId || 'Unbekannt'}`,
-    });
-  } catch (e) {
-    console.error('❌ Erstellen des Channels fehlgeschlagen:', e?.code, e?.message);
-    throw e;
-  }
+  // Channel erstellen
+  const channel = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent,
+    permissionOverwrites: overwrites,
+    reason: `Whitelist-Ticket für ${applicantTag || applicantDiscordId || 'Unbekannt'}`,
+  });
+
+  // Meta vormerken
+  const meta = {
+    caseId,
+    applicantDiscordId,
+    createdAt: Date.now(),
+    claimedBy: null,
+    claimedAt: null,
+    originalMessageId: null,
+    closedBy: null,
+    closedAt: null,
+  };
+  await writeMeta(channel, meta);
 
   // EMBED (StarCity)
   const embed = new EmbedBuilder()
     .setColor(BRAND.color)
     .setTitle('📨 Whitelist-Ticket eröffnet')
-    .setDescription([
-      '**Herzlich Willkommen auf StarCity!**',
-      'Schön, dass du dich für unser Projekt interessierst.',
-      'Hier ist die Zusammenfassung deiner Bewerbung:',
-      '',
-      '*(Unser Team meldet sich zeitnah bei dir. Bitte bleib in diesem Ticket.)*',
-    ].join('\n'))
+    .setDescription(
+      [
+        '**Herzlich Willkommen auf StarCity!**',
+        'Schön, dass du dich für unser Projekt interessierst.',
+        'Hier ist die Zusammenfassung deiner Bewerbung:',
+        '',
+        '*(Unser Team meldet sich zeitnah bei dir. Bitte bleib in diesem Ticket.)*',
+      ].join('\n')
+    )
     .setFooter({ text: `${caseId} • Kategorie: Whitelist` })
     .setTimestamp();
 
-  if (BRAND.icon) embed.setAuthor({ name: BRAND.name, iconURL: BRAND.icon }); else embed.setAuthor({ name: BRAND.name });
+  if (BRAND.icon) embed.setAuthor({ name: BRAND.name, iconURL: BRAND.icon });
+  else embed.setAuthor({ name: BRAND.name });
   if (BRAND.icon) embed.setThumbnail(BRAND.icon);
   if (BRAND.banner) embed.setImage(BRAND.banner);
 
@@ -214,65 +271,129 @@ async function createTicketChannel({
     });
   }
 
-  await channel.send({
-    content: `<@&${staffRoleId}> Neues Ticket`,
+  // Embed + Buttons senden
+  const sent = await channel.send({
+    content: `<@&${process.env.STAFF_ROLE_ID}> Neues Ticket`,
     embeds: [embed],
-    allowedMentions: { roles: [staffRoleId] },
+    components: [buildButtonsState()],
+    allowedMentions: { roles: [process.env.STAFF_ROLE_ID] },
   });
 
-  return { channel, caseId };
+  // Message-ID merken
+  meta.originalMessageId = sent.id;
+  await writeMeta(channel, meta);
+
+  return { channel, caseId, messageId: sent.id };
 }
 
 /* ===========================
-   SLASH HANDLER (nur 1x ack)
+   INTERACTIONS (Slash + Buttons)
    =========================== */
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== 'ticket-test') return;
+  // Slash
+  if (interaction.isChatInputCommand()) {
+    if (interaction.commandName !== 'ticket-test') return;
 
-  try {
-    await interaction.deferReply({ flags: 64 }); // EPHEMERAL
-  } catch (e) {
-    console.error('❌ deferReply fehlgeschlagen:', e?.code, e?.message);
+    try {
+      await interaction.deferReply({ flags: 64 }); // EPHEMERAL
+    } catch (e) {
+      console.error('❌ deferReply fehlgeschlagen:', e?.code, e?.message);
+      return;
+    }
+
+    try {
+      const charName = interaction.options.getString('charname', true);
+
+      const { channel } = await createTicketChannel({
+        guildId: process.env.GUILD_ID,
+        categoryId: process.env.TICKETS_CATEGORY_ID,
+        staffRoleId: process.env.STAFF_ROLE_ID,
+        applicantDiscordId: interaction.user.id,
+        applicantTag: `${interaction.user.username}`,
+        form: {
+          charName,
+          alter: 19,
+          steamHex: '110000112345678',
+          discordTag: `${interaction.user.username}`,
+          howFound: 'Über einen Freund',
+          deskItem: 'Kaffee & Notizbuch',
+          timezone: 'Europe/Berlin',
+          websiteTicketId: 'SC-TEST-001',
+          answers: [
+            { question: 'Woran kannst du dich erinnern, wenn dir ein Medic geholfen hat?', answer: 'Nicht an Details der Verletzung.' },
+            { question: 'Darf der FiveM-Account geteilt werden?', answer: 'Nein.' },
+            { question: 'Max. Mitglieder in einer Fraktion?', answer: '10' },
+          ],
+        },
+      });
+
+      await interaction.editReply({ content: `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` });
+    } catch (e) {
+      console.error('❌ Ticket-Fehler:', e?.code, e?.message);
+      await interaction.editReply({
+        content:
+          '❌ Konnte Ticket nicht erstellen. Prüfe Rechte & IDs.\n' +
+          '• Hat der Bot im Kategorie-Ordner **Manage Channels** + **View Channel**?\n' +
+          '• Ist `TICKETS_CATEGORY_ID` wirklich eine **Kategorie**?\n' +
+          '• Stimmt `STAFF_ROLE_ID` (Server-spezifisch)?',
+      });
+    }
     return;
   }
 
+  // Buttons
+  if (!interaction.isButton()) return;
+
+  // nur Staff darf Buttons nutzen
+  if (!interaction.member.roles.cache.has(process.env.STAFF_ROLE_ID)) {
+    try {
+      await interaction.reply({ content: '❌ Nur Staff darf diese Aktion nutzen.', flags: 64 });
+    } catch {}
+    return;
+  }
+
+  // sicher bestätigen (ephemeral)
   try {
-    const charName = interaction.options.getString('charname', true);
+    await interaction.deferReply({ flags: 64 });
+  } catch { return; }
 
-    const { channel } = await createTicketChannel({
-      guildId: process.env.GUILD_ID,
-      categoryId: process.env.TICKETS_CATEGORY_ID,
-      staffRoleId: process.env.STAFF_ROLE_ID,
-      applicantDiscordId: interaction.user.id,
-      applicantTag: `${interaction.user.username}`,
-      form: {
-        charName,
-        alter: 19,
-        steamHex: '110000112345678',
-        discordTag: `${interaction.user.username}`,
-        howFound: 'Über einen Freund',
-        deskItem: 'Kaffee & Notizbuch',
-        timezone: 'Europe/Berlin',
-        websiteTicketId: 'SC-TEST-001',
-        answers: [
-          { question: 'Woran kannst du dich erinnern, wenn dir ein Medic geholfen hat?', answer: 'Nicht an Details der Verletzung.' },
-          { question: 'Darf der FiveM-Account geteilt werden?', answer: 'Nein.' },
-          { question: 'Max. Mitglieder in einer Fraktion?', answer: '10' },
-        ],
-      },
-    });
+  const channel = interaction.channel;
+  const meta = readMeta(channel) || {};
+  const applicantId = meta.applicantDiscordId || null;
 
-    await interaction.editReply({ content: `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` });
-  } catch (e) {
-    console.error('❌ Ticket-Fehler:', e?.code, e?.message);
-    await interaction.editReply({
-      content:
-        '❌ Konnte Ticket nicht erstellen. Prüfe Rechte & IDs.\n' +
-        '• Hat der Bot im Kategorie-Ordner **Manage Channels** + **View Channel**?\n' +
-        '• Ist `TICKETS_CATEGORY_ID` wirklich eine **Kategorie**?\n' +
-        '• Stimmt `STAFF_ROLE_ID` (Server-spezifisch)?',
-    });
+  // Hilfsfunktion: ursprüngliche Nachricht (mit Buttons) bearbeiten
+  const editOriginalButtons = async (state) => {
+    if (!meta.originalMessageId) return;
+    const msg = await channel.messages.fetch(meta.originalMessageId).catch(() => null);
+    if (!msg) return;
+    await msg.edit({ components: [buildButtonsState(state)] }).catch(() => {});
+  };
+
+  if (interaction.customId === 'ticket_claim') {
+    if (meta.claimedBy) {
+      await interaction.editReply(`ℹ️ Bereits übernommen von <@${meta.claimedBy}>.`);
+      return;
+    }
+    meta.claimedBy = interaction.user.id;
+    meta.claimedAt = Date.now();
+    await writeMeta(channel, meta);
+    await editOriginalButtons({ claimed: true, closed: false });
+
+    await channel.send(`✅ <@${interaction.user.id}> **hat das Ticket übernommen.**`);
+    await interaction.editReply('Übernahme bestätigt.');
+    return;
+  }
+
+  if (interaction.customId === 'ticket_close') {
+    meta.closedBy = interaction.user.id;
+    meta.closedAt = Date.now();
+    await writeMeta(channel, meta);
+    await lockChannelSend(channel, applicantId);
+    await editOriginalButtons({ claimed: !!meta.claimedBy, closed: true });
+
+    await channel.send(`🔒 <@${interaction.user.id}> **hat das Ticket geschlossen.**`);
+    await interaction.editReply('Ticket geschlossen.');
+    return;
   }
 });
 
@@ -281,7 +402,6 @@ client.on('interactionCreate', async (interaction) => {
    =========================== */
 const app = express();
 
-// Sichtbar prüfen:
 app.get('/health', (_req, res) => res.send('StarCity Bot alive'));
 app.get('/version', (_req, res) => res.json({ version: STARSTYLE_VERSION }));
 
@@ -317,7 +437,6 @@ app.post('/whitelist', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'invalid signature' });
     }
 
-    // Unterstütze beide Feldnamen: erfahrung/howFound und motivation/deskItem
     const {
       discordId,
       discordTag,
@@ -333,8 +452,7 @@ app.post('/whitelist', async (req, res) => {
       answers,
     } = req.body;
 
-    if (!charName)
-      return res.status(400).json({ ok: false, error: 'charName required' });
+    if (!charName) return res.status(400).json({ ok: false, error: 'charName required' });
 
     const { channel, caseId } = await createTicketChannel({
       guildId: process.env.GUILD_ID,

@@ -17,7 +17,7 @@ import {
 /* ===========================
    VERSION & BRAND
    =========================== */
-const STARSTYLE_VERSION = 'StarCity style v6.8';
+const STARSTYLE_VERSION = 'StarCity style v6.9';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
@@ -60,7 +60,7 @@ const toPayload = (x) => (typeof x === 'string' ? { content: x } : (x || { conte
 async function ackNow(interaction, trace) {
   try {
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.reply({ content: '⏳ …', flags: 64 });
+      await interaction.reply({ content: '⏳ wird verarbeitet…', flags: 64 });
       console.log(`${trace} ACK replied`);
       return true;
     }
@@ -81,7 +81,7 @@ async function editOrFollowUp(interaction, payload, trace) {
     }
   } catch (e) {
     if (e?.code === 50027 || e?.status === 401) {
-      console.log(`${trace} reply token expired → channel.send`);
+      console.log(`${trace} token expired → channel.send`);
       try { await interaction.channel?.send(data); } catch {}
     } else if (e?.code === 40060) {
       console.log(`${trace} already ack → followUp`);
@@ -92,13 +92,10 @@ async function editOrFollowUp(interaction, payload, trace) {
   }
 }
 
-/* ---------- DEDUPE: Interaction-IDs ---------- */
-const seen = new Map(); // id -> timestamp
-function isDuplicate(id, trace) {
-  if (seen.has(id)) {
-    console.log(`${trace} DEDUPED`);
-    return true;
-  }
+/* ---------- DEDUPE ---------- */
+const seen = new Map();
+function isDuplicate(id) {
+  if (seen.has(id)) return true;
   seen.set(id, Date.now());
   setTimeout(() => seen.delete(id), 120000).unref?.();
   return false;
@@ -242,7 +239,6 @@ async function createTicketChannel({
     overwrites.push({ id: applicantDiscordId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
   }
 
-  // Channel erstellen
   const channel = await guild.channels.create({
     name: channelName,
     type: ChannelType.GuildText,
@@ -251,7 +247,6 @@ async function createTicketChannel({
     reason: `Whitelist-Ticket für ${applicantTag || applicantDiscordId || 'Unbekannt'}`,
   });
 
-  // Meta vormerken
   const meta = {
     caseId,
     applicantDiscordId,
@@ -264,7 +259,6 @@ async function createTicketChannel({
   };
   await writeMeta(channel, meta);
 
-  // EMBED
   const embed = new EmbedBuilder()
     .setColor(BRAND.color)
     .setTitle('📨 Whitelist-Ticket eröffnet')
@@ -319,27 +313,16 @@ async function createTicketChannel({
    =========================== */
 client.on('interactionCreate', async (interaction) => {
   const traceBase = `TRACE[${interaction.id}]`;
+  if (isDuplicate(interaction.id)) { console.log(`${traceBase} DEDUPED`); return; }
 
-  // DEDUPE
-  if (isDuplicate(interaction.id, traceBase)) return;
-
-  // Slash
+  // SLASH
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName !== 'ticket-test') return;
-
     const trace = `${traceBase} SLASH`;
     console.time(trace);
     await ackNow(interaction, trace);
-
-    // Watchdog (3s)
-    let done = false;
-    const timer = setTimeout(() => {
-      if (!done) editOrFollowUp(interaction, '⏳ Ich arbeite daran…', trace).catch(() => {});
-    }, 3000).unref?.();
-
     try {
       const charName = interaction.options.getString('charname', true);
-      console.log(`${trace} STEP createTicket`);
       const { channel } = await createTicketChannel({
         guildId: process.env.GUILD_ID,
         categoryId: process.env.TICKETS_CATEGORY_ID,
@@ -367,33 +350,23 @@ client.on('interactionCreate', async (interaction) => {
       console.error(`${trace} ERROR:`, e?.code, e?.message || e);
       await editOrFollowUp(interaction, '❌ Konnte Ticket nicht erstellen (Details in Logs).', trace);
     } finally {
-      done = true;
-      clearTimeout(timer);
       console.timeEnd(trace);
     }
     return;
   }
 
-  // Buttons
+  // BUTTONS
   if (!interaction.isButton()) return;
-
   const trace = `${traceBase} BTN:${interaction.customId}`;
   console.time(trace);
   console.log(`${trace} click by ${interaction.user?.tag || interaction.user?.id} in #${interaction.channel?.id} (replied:${interaction.replied} deferred:${interaction.deferred})`);
 
   await ackNow(interaction, trace);
 
-  // Watchdog (3s)
-  let done = false;
-  const timer = setTimeout(() => {
-    if (!done) editOrFollowUp(interaction, '⏳ Ich arbeite daran…', trace).catch(() => {});
-  }, 3000).unref?.();
-
   try {
     const staffRoleId = process.env.STAFF_ROLE_ID;
     if (!staffRoleId) { await editOrFollowUp(interaction, '⚠️ STAFF_ROLE_ID nicht gesetzt.', trace); return; }
 
-    // Staff-Check
     const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
     if (!isStaff) { await editOrFollowUp(interaction, '❌ Nur Staff darf diese Aktion nutzen.', trace); return; }
 
@@ -401,8 +374,7 @@ client.on('interactionCreate', async (interaction) => {
     const meta = readMeta(channel) || {};
     const applicantId = meta.applicantDiscordId || null;
 
-    // Bot-Rechte
-    console.log(`${trace} STEP perms`);
+    // Rechte
     const botPerms = channel.permissionsFor(interaction.guild.members.me);
     if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
       console.error(`${trace} fehlende Rechte ManageChannels`);
@@ -410,37 +382,56 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    const editButtons = async (state) => {
+    // *** SOFORT: Buttons am geklickten Embed aktualisieren ***
+    const setButtonsOnMessage = async (state) => {
       try {
-        if (!meta.originalMessageId) return;
-        const msg = await channel.messages.fetch(meta.originalMessageId);
-        await msg.edit({ components: [buildButtonsState(state)] });
+        await interaction.message.edit({ components: [buildButtonsState(state)] });
+        console.log(`${trace} buttons updated on interaction.message`);
       } catch (e) {
-        console.error(`${trace} Button-Edit-Fehler`, e?.code, e?.message || e);
+        console.error(`${trace} buttons edit on interaction.message failed`, e?.code, e?.message || e);
       }
     };
 
     if (interaction.customId === 'ticket_claim') {
-      console.log(`${trace} STEP claim`);
-      if (meta.claimedBy) { await editOrFollowUp(interaction, `ℹ️ Bereits übernommen von <@${meta.claimedBy}>.`, trace); return; }
+      // UI sofort anpassen
+      await setButtonsOnMessage({ claimed: true, closed: false });
+
+      // Meta + sichtbare Info
       meta.claimedBy = interaction.user.id;
       meta.claimedAt = Date.now();
       await writeMeta(channel, meta);
-      await editButtons({ claimed: true, closed: false });
-      await channel.send(`✅ <@${interaction.user.id}> **hat das Ticket übernommen.**`);
+
+      try {
+        await channel.send(`✅ <@${interaction.user.id}> **hat das Ticket übernommen.**`);
+        console.log(`${trace} channel.send claim OK`);
+      } catch (e) {
+        console.error(`${trace} channel.send claim FAIL`, e?.code, e?.message || e);
+      }
+
       await editOrFollowUp(interaction, 'Übernahme bestätigt.', trace);
+      console.timeEnd(trace);
       return;
     }
 
     if (interaction.customId === 'ticket_close') {
-      console.log(`${trace} STEP close`);
+      // UI sofort anpassen
+      await setButtonsOnMessage({ claimed: !!meta.claimedBy, closed: true });
+
+      // Meta + Sperren
       meta.closedBy = interaction.user.id;
       meta.closedAt = Date.now();
       await writeMeta(channel, meta);
       await lockChannelSend(channel, applicantId);
-      await editButtons({ claimed: !!meta.claimedBy, closed: true });
-      await channel.send(`🔒 <@${interaction.user.id}> **hat das Ticket geschlossen.**`);
+
+      try {
+        await channel.send(`🔒 <@${interaction.user.id}> **hat das Ticket geschlossen.**`);
+        console.log(`${trace} channel.send close OK`);
+      } catch (e) {
+        console.error(`${trace} channel.send close FAIL`, e?.code, e?.message || e);
+      }
+
       await editOrFollowUp(interaction, 'Ticket geschlossen.', trace);
+      console.timeEnd(trace);
       return;
     }
 
@@ -449,8 +440,6 @@ client.on('interactionCreate', async (interaction) => {
     console.error(`${trace} Unhandled error`, e?.code, e?.message || e);
     await editOrFollowUp(interaction, '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).', trace);
   } finally {
-    done = true;
-    clearTimeout(timer);
     console.timeEnd(trace);
   }
 });

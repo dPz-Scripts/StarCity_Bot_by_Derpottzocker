@@ -385,19 +385,20 @@ client.on('interactionCreate', async (interaction) => {
     console.log(`${trace} START by ${interaction.user?.tag || interaction.user?.id}`);
     
     await ackNow(interaction, trace);
+    
+    const charName = interaction.options.getString('charname', true);
+    const slashKey = createSlashKey(process.env.GUILD_ID, interaction.user.id, charName);
+    
+    // Idempotenz prüfen
+    const idempCheck = checkIdempotency(slashCache, slashKey, trace);
+    if (!idempCheck.allowed) {
+      const reason = idempCheck.reason === 'inflight' ? 'Ticket wird bereits erstellt...' : 'Zu viele Tickets in kurzer Zeit. Bitte warte 5 Minuten.';
+      await editOrFollowUp(interaction, `⚠️ ${reason}`, trace);
+      console.timeEnd(trace);
+      return;
+    }
+    
     try {
-      const charName = interaction.options.getString('charname', true);
-      const slashKey = createSlashKey(process.env.GUILD_ID, interaction.user.id, charName);
-      
-      // Idempotenz prüfen
-      const idempCheck = checkIdempotency(slashCache, slashKey, trace);
-      if (!idempCheck.allowed) {
-        const reason = idempCheck.reason === 'inflight' ? 'Ticket wird bereits erstellt...' : 'Zu viele Tickets in kurzer Zeit. Bitte warte 5 Minuten.';
-        await editOrFollowUp(interaction, `⚠️ ${reason}`, trace);
-        console.timeEnd(trace);
-        return;
-      }
-      
       console.log(`${trace} SCHRITT: Ticket-Channel wird erstellt`);
       const { channel } = await createTicketChannel({
         guildId: process.env.GUILD_ID,
@@ -422,13 +423,14 @@ client.on('interactionCreate', async (interaction) => {
         },
       });
       
-      markComplete(slashCache, slashKey, trace);
       console.log(`${trace} SCHRITT: Ticket erfolgreich erstellt`);
       await editOrFollowUp(interaction, `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`, trace);
     } catch (e) {
       console.error(`${trace} ERROR:`, e?.code, e?.message || e);
       await editOrFollowUp(interaction, '❌ Konnte Ticket nicht erstellen (Details in Logs).', trace);
     } finally {
+      // WICHTIG: markComplete IMMER aufrufen, auch bei Fehlern
+      markComplete(slashCache, slashKey, trace);
       console.timeEnd(trace);
     }
     return;
@@ -440,20 +442,18 @@ client.on('interactionCreate', async (interaction) => {
   console.time(trace);
   console.log(`${trace} START by ${interaction.user?.tag || interaction.user?.id} in #${interaction.channel?.id}`);
 
-  await ackNow(interaction, trace);
-
   try {
     const staffRoleId = process.env.STAFF_ROLE_ID;
     if (!staffRoleId) { 
       console.log(`${trace} SCHRITT: STAFF_ROLE_ID fehlt`);
-      await editOrFollowUp(interaction, '⚠️ STAFF_ROLE_ID nicht gesetzt.', trace); 
+      await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht gesetzt.', ephemeral: true });
       return; 
     }
 
     const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
     if (!isStaff) { 
       console.log(`${trace} SCHRITT: Benutzer ist kein Staff`);
-      await editOrFollowUp(interaction, '❌ Nur Staff darf diese Aktion nutzen.', trace); 
+      await interaction.reply({ content: '❌ Nur Staff darf diese Aktion nutzen.', ephemeral: true });
       return; 
     }
 
@@ -465,7 +465,7 @@ client.on('interactionCreate', async (interaction) => {
     const botPerms = channel.permissionsFor(interaction.guild.members.me);
     if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
       console.error(`${trace} SCHRITT: ManageChannels-Berechtigung fehlt`);
-      await editOrFollowUp(interaction, '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.', trace);
+      await interaction.reply({ content: '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.', ephemeral: true });
       return;
     }
 
@@ -498,7 +498,7 @@ client.on('interactionCreate', async (interaction) => {
         console.error(`${trace} SCHRITT: channel.send Übernahme FEHLGESCHLAGEN`, e?.code, e?.message || e);
       }
 
-      await editOrFollowUp(interaction, 'Übernahme bestätigt.', trace);
+      await interaction.reply({ content: '✅ Übernahme bestätigt.', ephemeral: true });
       console.timeEnd(trace);
       return;
     }
@@ -525,16 +525,20 @@ client.on('interactionCreate', async (interaction) => {
         console.error(`${trace} SCHRITT: channel.send Schließung FEHLGESCHLAGEN`, e?.code, e?.message || e);
       }
 
-      await editOrFollowUp(interaction, 'Ticket geschlossen.', trace);
+      await interaction.reply({ content: '🔒 Ticket geschlossen.', ephemeral: true });
       console.timeEnd(trace);
       return;
     }
 
     console.log(`${trace} SCHRITT: Unbekannte Aktion`);
-    await editOrFollowUp(interaction, 'ℹ️ Unbekannte Aktion.', trace);
+    await interaction.reply({ content: 'ℹ️ Unbekannte Aktion.', ephemeral: true });
   } catch (e) {
     console.error(`${trace} ERROR:`, e?.code, e?.message || e);
-    await editOrFollowUp(interaction, '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).', trace);
+    try {
+      await interaction.reply({ content: '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).', ephemeral: true });
+    } catch (replyError) {
+      console.error(`${trace} REPLY ERROR:`, replyError?.code, replyError?.message || replyError);
+    }
   } finally {
     console.timeEnd(trace);
   }
@@ -624,7 +628,6 @@ app.post('/whitelist', async (req, res) => {
       },
     });
 
-    markComplete(webhookCache, webhookKey, trace);
     console.log(`${trace} SCHRITT: Ticket erfolgreich erstellt`);
     
     return res.json({ ok: true, caseId, channelId: channel.id, url: `https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` });
@@ -632,6 +635,8 @@ app.post('/whitelist', async (req, res) => {
     console.error(`${trace} ERROR:`, e?.code, e?.message || e);
     return res.status(500).json({ ok: false, error: 'server error' });
   } finally {
+    // WICHTIG: markComplete IMMER aufrufen, auch bei Fehlern
+    markComplete(webhookCache, webhookKey, trace);
     console.timeEnd(trace);
   }
 });

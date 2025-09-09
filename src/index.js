@@ -97,9 +97,8 @@ const slashCache = new Map(); // guildId:userId:charName -> { inflight: boolean,
 const webhookCache = new Map(); // websiteTicketId oder hash -> { inflight: boolean, recent: timestamp }
 
 function createSlashKey(guildId, userId, charName) {
-  // Eindeutiger Key mit Zeitstempel für bessere Idempotenz
-  const timeWindow = Math.floor(Date.now() / 10000); // 10-Sekunden-Fenster
-  return `slash:${guildId}:${userId}:${charName.toLowerCase().trim()}:${timeWindow}`;
+  // Einfacher, aber effektiver Key ohne Zeitfenster
+  return `slash:${guildId}:${userId}:${charName.toLowerCase().trim()}`;
 }
 
 function createWebhookKey(websiteTicketId, discordId, charName) {
@@ -122,7 +121,7 @@ function checkIdempotency(cache, key, trace) {
   }
   
   const age = Date.now() - entry.recent;
-  if (age < 300000) { // 5 Minuten
+  if (age < 30000) { // 30 Sekunden
     console.log(`${trace} IDEMPOTENZ: zu kürzlich (vor ${Math.round(age/1000)}s)`);
     return { allowed: false, reason: 'recent' };
   }
@@ -393,10 +392,10 @@ client.on('interactionCreate', async (interaction) => {
     
     console.log(`${trace} SCHRITT: Cache-Key erstellt: ${slashKey}`);
     
-    // Idempotenz prüfen
+    // Idempotenz prüfen - aber nur für sehr kurze Zeit (30 Sekunden)
     const idempCheck = checkIdempotency(slashCache, slashKey, trace);
     if (!idempCheck.allowed) {
-      const reason = idempCheck.reason === 'inflight' ? 'Ticket wird bereits erstellt...' : 'Zu viele Tickets in kurzer Zeit. Bitte warte 5 Minuten.';
+      const reason = idempCheck.reason === 'inflight' ? 'Ticket wird bereits erstellt...' : 'Zu viele Tickets in kurzer Zeit. Bitte warte 30 Sekunden.';
       await editOrFollowUp(interaction, `⚠️ ${reason}`, trace);
       console.timeEnd(trace);
       return;
@@ -504,8 +503,13 @@ client.on('interactionCreate', async (interaction) => {
 
       // Ephemere Antwort für den Staff-Mitglied
       try {
-        await interaction.reply({ content: '✅ Übernahme bestätigt.', ephemeral: true });
-        console.log(`${trace} SCHRITT: Ephemere Antwort gesendet`);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: '✅ Übernahme bestätigt.', ephemeral: true });
+          console.log(`${trace} SCHRITT: Ephemere Antwort gesendet`);
+        } else {
+          await interaction.followUp({ content: '✅ Übernahme bestätigt.', ephemeral: true });
+          console.log(`${trace} SCHRITT: FollowUp gesendet`);
+        }
       } catch (e) {
         console.error(`${trace} SCHRITT: Ephemere Antwort FEHLGESCHLAGEN`, e?.code, e?.message || e);
       }
@@ -538,8 +542,13 @@ client.on('interactionCreate', async (interaction) => {
 
       // Ephemere Antwort für den Staff-Mitglied
       try {
-        await interaction.reply({ content: '🔒 Ticket geschlossen.', ephemeral: true });
-        console.log(`${trace} SCHRITT: Ephemere Antwort gesendet`);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: '🔒 Ticket geschlossen.', ephemeral: true });
+          console.log(`${trace} SCHRITT: Ephemere Antwort gesendet`);
+        } else {
+          await interaction.followUp({ content: '🔒 Ticket geschlossen.', ephemeral: true });
+          console.log(`${trace} SCHRITT: FollowUp gesendet`);
+        }
       } catch (e) {
         console.error(`${trace} SCHRITT: Ephemere Antwort FEHLGESCHLAGEN`, e?.code, e?.message || e);
       }

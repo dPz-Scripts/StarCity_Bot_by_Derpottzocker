@@ -169,7 +169,14 @@ async function registerSlashCommands() {
   ];
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   const appId = (await client.application.fetch()).id;
+  
+  // ZUERST alle alten Commands löschen
+  await rest.put(Routes.applicationGuildCommands(appId, process.env.GUILD_ID), { body: [] });
+  console.log('🗑️ Alte Slash-Commands gelöscht');
+  
+  // Dann neue Commands registrieren
   await rest.put(Routes.applicationGuildCommands(appId, process.env.GUILD_ID), { body: commands });
+  console.log('✅ Neue Slash-Commands registriert');
 }
 
 /* ===========================
@@ -418,12 +425,12 @@ client.on('interactionCreate', async (interaction) => {
           ? '⏳ Ticket wird bereits erstellt...' 
           : `⏳ Zu viele Tickets in kurzer Zeit. Bitte warte ${check.age || 60} Sekunden.`;
         
-        await interaction.reply({ content: message, ephemeral: true });
+        await interaction.reply({ content: message, flags: 64 });
         return;
       }
 
       // ACK senden
-      await interaction.reply({ content: '⏳ Ticket wird erstellt...', ephemeral: true });
+      await interaction.reply({ content: '⏳ Ticket wird erstellt...', flags: 64 });
 
       try {
         const { channel } = await createTicketChannel({
@@ -465,15 +472,17 @@ client.on('interactionCreate', async (interaction) => {
 
     // BUTTON INTERACTIONS
     if (interaction.isButton()) {
+      console.log(`[${traceId}] Button-Klick: ${interaction.customId}`);
+      
       const staffRoleId = process.env.STAFF_ROLE_ID;
       if (!staffRoleId) {
-        await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht konfiguriert.', ephemeral: true });
+        await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht konfiguriert.', flags: 64 });
         return;
       }
 
       const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
       if (!isStaff) {
-        await interaction.reply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.', ephemeral: true });
+        await interaction.reply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.', flags: 64 });
         return;
       }
 
@@ -481,64 +490,74 @@ client.on('interactionCreate', async (interaction) => {
       const meta = readTicketMeta(channel);
       
       if (!meta.caseId) {
-        await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', ephemeral: true });
+        await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
         return;
       }
 
       // Berechtigungen prüfen
       const botPerms = channel.permissionsFor(interaction.guild.members.me);
       if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
-        await interaction.reply({ content: '❌ Mir fehlen die nötigen Berechtigungen.', ephemeral: true });
+        await interaction.reply({ content: '❌ Mir fehlen die nötigen Berechtigungen.', flags: 64 });
         return;
       }
 
       if (interaction.customId === 'ticket_claim') {
         if (meta.claimedBy) {
-          await interaction.reply({ content: '⚠️ Dieses Ticket wurde bereits übernommen.', ephemeral: true });
+          await interaction.reply({ content: '⚠️ Dieses Ticket wurde bereits übernommen.', flags: 64 });
           return;
         }
 
-        // Buttons sofort aktualisieren
-        await interaction.message.edit({ 
-          components: [buildTicketButtons({ claimed: true, closed: false })] 
-        });
+        try {
+          // Buttons sofort aktualisieren
+          await interaction.message.edit({ 
+            components: [buildTicketButtons({ claimed: true, closed: false })] 
+          });
 
-        // Meta aktualisieren
-        meta.claimedBy = interaction.user.id;
-        meta.claimedAt = Date.now();
-        meta.status = 'claimed';
-        await writeTicketMeta(channel, meta);
+          // Meta aktualisieren
+          meta.claimedBy = interaction.user.id;
+          meta.claimedAt = Date.now();
+          meta.status = 'claimed';
+          await writeTicketMeta(channel, meta);
 
-        // Channel-Nachricht
-        await channel.send(`✅ **Ticket übernommen**\n<@${interaction.user.id}> hat das Ticket übernommen und wird sich um deine Bewerbung kümmern.`);
+          // Channel-Nachricht
+          await channel.send(`✅ **Ticket übernommen**\n<@${interaction.user.id}> hat das Ticket übernommen und wird sich um deine Bewerbung kümmern.`);
 
-        // Ephemere Bestätigung
-        await interaction.reply({ content: '✅ Ticket erfolgreich übernommen!', ephemeral: true });
-        
+          // Ephemere Bestätigung
+          await interaction.reply({ content: '✅ Ticket erfolgreich übernommen!', flags: 64 });
+          
+        } catch (error) {
+          console.error(`[${traceId}] Fehler bei Ticket-Übernahme:`, error);
+          await interaction.reply({ content: '❌ Fehler bei der Ticket-Übernahme.', flags: 64 });
+        }
         return;
       }
 
       if (interaction.customId === 'ticket_close') {
-        // Buttons sofort aktualisieren
-        await interaction.message.edit({ 
-          components: [buildTicketButtons({ claimed: !!meta.claimedBy, closed: true })] 
-        });
+        try {
+          // Buttons sofort aktualisieren
+          await interaction.message.edit({ 
+            components: [buildTicketButtons({ claimed: !!meta.claimedBy, closed: true })] 
+          });
 
-        // Meta aktualisieren
-        meta.closedBy = interaction.user.id;
-        meta.closedAt = Date.now();
-        meta.status = 'closed';
-        await writeTicketMeta(channel, meta);
+          // Meta aktualisieren
+          meta.closedBy = interaction.user.id;
+          meta.closedAt = Date.now();
+          meta.status = 'closed';
+          await writeTicketMeta(channel, meta);
 
-        // Channel sperren
-        await lockChannel(channel, meta.applicantDiscordId);
+          // Channel sperren
+          await lockChannel(channel, meta.applicantDiscordId);
 
-        // Channel-Nachricht
-        await channel.send(`🔒 **Ticket geschlossen**\n<@${interaction.user.id}> hat das Ticket geschlossen.`);
+          // Channel-Nachricht
+          await channel.send(`🔒 **Ticket geschlossen**\n<@${interaction.user.id}> hat das Ticket geschlossen.`);
 
-        // Ephemere Bestätigung
-        await interaction.reply({ content: '🔒 Ticket erfolgreich geschlossen!', ephemeral: true });
-        
+          // Ephemere Bestätigung
+          await interaction.reply({ content: '🔒 Ticket erfolgreich geschlossen!', flags: 64 });
+          
+        } catch (error) {
+          console.error(`[${traceId}] Fehler bei Ticket-Schließung:`, error);
+          await interaction.reply({ content: '❌ Fehler bei der Ticket-Schließung.', flags: 64 });
+        }
         return;
       }
     }
@@ -548,7 +567,7 @@ client.on('interactionCreate', async (interaction) => {
     
     if (!interaction.replied && !interaction.deferred) {
       try {
-        await interaction.reply({ content: '❌ Ein unerwarteter Fehler ist aufgetreten.', ephemeral: true });
+        await interaction.reply({ content: '❌ Ein unerwarteter Fehler ist aufgetreten.', flags: 64 });
       } catch (replyError) {
         console.error(`[${traceId}] Reply-Fehler:`, replyError);
       }

@@ -474,91 +474,107 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       console.log(`[${traceId}] Button-Klick: ${interaction.customId}`);
       
-      const staffRoleId = process.env.STAFF_ROLE_ID;
-      if (!staffRoleId) {
-        await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht konfiguriert.', flags: 64 });
-        return;
-      }
-
-      const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
-      if (!isStaff) {
-        await interaction.reply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.', flags: 64 });
-        return;
-      }
-
-      const channel = interaction.channel;
-      const meta = readTicketMeta(channel);
-      
-      if (!meta.caseId) {
-        await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
-        return;
-      }
-
-      // Berechtigungen prüfen
-      const botPerms = channel.permissionsFor(interaction.guild.members.me);
-      if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
-        await interaction.reply({ content: '❌ Mir fehlen die nötigen Berechtigungen.', flags: 64 });
-        return;
-      }
-
-      if (interaction.customId === 'ticket_claim') {
-        if (meta.claimedBy) {
-          await interaction.reply({ content: '⚠️ Dieses Ticket wurde bereits übernommen.', flags: 64 });
+      try {
+        const staffRoleId = process.env.STAFF_ROLE_ID;
+        if (!staffRoleId) {
+          console.log(`[${traceId}] STAFF_ROLE_ID nicht konfiguriert`);
+          await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht konfiguriert.', flags: 64 });
           return;
         }
 
-        try {
+        const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
+        console.log(`[${traceId}] Staff-Check: ${isStaff} (Role: ${staffRoleId})`);
+        if (!isStaff) {
+          await interaction.reply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.', flags: 64 });
+          return;
+        }
+
+        const channel = interaction.channel;
+        const meta = readTicketMeta(channel);
+        console.log(`[${traceId}] Meta-Daten:`, meta);
+        
+        if (!meta.caseId) {
+          console.log(`[${traceId}] Kein gültiges Ticket (kein caseId)`);
+          await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
+          return;
+        }
+
+        // Berechtigungen prüfen
+        const botPerms = channel.permissionsFor(interaction.guild.members.me);
+        if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
+          console.log(`[${traceId}] Fehlende ManageChannels-Berechtigung`);
+          await interaction.reply({ content: '❌ Mir fehlen die nötigen Berechtigungen.', flags: 64 });
+          return;
+        }
+
+        if (interaction.customId === 'ticket_claim') {
+          console.log(`[${traceId}] Verarbeite Ticket-Übernahme`);
+          if (meta.claimedBy) {
+            await interaction.reply({ content: '⚠️ Dieses Ticket wurde bereits übernommen.', flags: 64 });
+            return;
+          }
+
           // Buttons sofort aktualisieren
+          console.log(`[${traceId}] Aktualisiere Buttons`);
           await interaction.message.edit({ 
             components: [buildTicketButtons({ claimed: true, closed: false })] 
           });
 
           // Meta aktualisieren
+          console.log(`[${traceId}] Aktualisiere Meta-Daten`);
           meta.claimedBy = interaction.user.id;
           meta.claimedAt = Date.now();
           meta.status = 'claimed';
           await writeTicketMeta(channel, meta);
 
           // Channel-Nachricht
+          console.log(`[${traceId}] Sende Channel-Nachricht`);
           await channel.send(`✅ **Ticket übernommen**\n<@${interaction.user.id}> hat das Ticket übernommen und wird sich um deine Bewerbung kümmern.`);
 
           // Ephemere Bestätigung
+          console.log(`[${traceId}] Sende ephemere Bestätigung`);
           await interaction.reply({ content: '✅ Ticket erfolgreich übernommen!', flags: 64 });
-          
-        } catch (error) {
-          console.error(`[${traceId}] Fehler bei Ticket-Übernahme:`, error);
-          await interaction.reply({ content: '❌ Fehler bei der Ticket-Übernahme.', flags: 64 });
+          return;
         }
-        return;
-      }
 
-      if (interaction.customId === 'ticket_close') {
-        try {
+        if (interaction.customId === 'ticket_close') {
+          console.log(`[${traceId}] Verarbeite Ticket-Schließung`);
+          
           // Buttons sofort aktualisieren
+          console.log(`[${traceId}] Aktualisiere Buttons`);
           await interaction.message.edit({ 
             components: [buildTicketButtons({ claimed: !!meta.claimedBy, closed: true })] 
           });
 
           // Meta aktualisieren
+          console.log(`[${traceId}] Aktualisiere Meta-Daten`);
           meta.closedBy = interaction.user.id;
           meta.closedAt = Date.now();
           meta.status = 'closed';
           await writeTicketMeta(channel, meta);
 
           // Channel sperren
+          console.log(`[${traceId}] Sperre Channel`);
           await lockChannel(channel, meta.applicantDiscordId);
 
           // Channel-Nachricht
+          console.log(`[${traceId}] Sende Channel-Nachricht`);
           await channel.send(`🔒 **Ticket geschlossen**\n<@${interaction.user.id}> hat das Ticket geschlossen.`);
 
           // Ephemere Bestätigung
+          console.log(`[${traceId}] Sende ephemere Bestätigung`);
           await interaction.reply({ content: '🔒 Ticket erfolgreich geschlossen!', flags: 64 });
-          
-        } catch (error) {
-          console.error(`[${traceId}] Fehler bei Ticket-Schließung:`, error);
-          await interaction.reply({ content: '❌ Fehler bei der Ticket-Schließung.', flags: 64 });
+          return;
         }
-        return;
+
+        console.log(`[${traceId}] Unbekannter Button: ${interaction.customId}`);
+        await interaction.reply({ content: '❌ Unbekannte Aktion.', flags: 64 });
+        
+      } catch (buttonError) {
+        console.error(`[${traceId}] Button-Fehler:`, buttonError);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: '❌ Fehler bei der Button-Aktion.', flags: 64 });
+        }
       }
     }
 

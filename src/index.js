@@ -17,7 +17,7 @@ import {
 /* ===========================
    VERSION & BRAND
    =========================== */
-const STARSTYLE_VERSION = 'StarCity style v6.4';
+const STARSTYLE_VERSION = 'StarCity style v6.5';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
@@ -54,18 +54,40 @@ const normalizeAnswers = (raw) => {
     .filter((x) => x.a !== '—');
 };
 
-// ---- sichere Antwort-Helfer (verhindert 50027-Crash) ----
-const toPayload = (x) => (typeof x === 'string' ? { content: x } : x || { content: 'OK' });
+/* ---------- ACK-SICHERE ANTWORTEN ---------- */
+const toPayload = (x) => (typeof x === 'string' ? { content: x } : (x || { content: 'OK' }));
 
-async function safeEditReply(interaction, payload) {
+async function ensureDeferred(interaction, { ephemeral = true } = {}) {
   try {
-    await interaction.editReply(toPayload(payload));
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply({ flags: ephemeral ? 64 : undefined });
+    }
   } catch (e) {
-    // Token abgelaufen oder ungültig -> in den Kanal schreiben statt crashen
+    // wenn schon acknowledged → egal
+  }
+}
+
+async function safeRespond(interaction, payload, { ephemeral = true } = {}) {
+  const data = toPayload(payload);
+  try {
+    if (interaction.deferred) {
+      await interaction.editReply(data);
+      return;
+    }
+    if (interaction.replied) {
+      await interaction.followUp({ ...data, flags: ephemeral ? 64 : undefined });
+      return;
+    }
+    await interaction.reply({ ...data, flags: ephemeral ? 64 : undefined });
+  } catch (e) {
+    // Fallback, falls Token abgelaufen/ungültig etc.
     if (e?.code === 50027 || e?.status === 401) {
-      try { await interaction.channel?.send(toPayload(payload)); } catch {}
+      try { await interaction.channel?.send(data); } catch {}
+    } else if (e?.code === 40060) {
+      // already acknowledged → followUp probieren
+      try { await interaction.followUp({ ...data, flags: ephemeral ? 64 : undefined }); } catch {}
     } else {
-      throw e;
+      console.error('RESP ERROR:', e?.code, e?.message || e);
     }
   }
 }
@@ -91,7 +113,7 @@ client.once('ready', async () => {
 client.login(process.env.DISCORD_TOKEN);
 
 /* ===========================
-   GLOBAL ERROR HANDLER (crash-sicher)
+   GLOBAL ERROR HANDLER
    =========================== */
 process.on('unhandledRejection', (reason) => {
   console.error('UNHANDLED REJECTION:', reason?.code, reason?.message || reason);
@@ -288,8 +310,7 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName !== 'ticket-test') return;
 
-    try { await interaction.deferReply({ flags: 64 }); } catch { return; }
-
+    await ensureDeferred(interaction);
     try {
       const charName = interaction.options.getString('charname', true);
       const { channel } = await createTicketChannel({
@@ -314,10 +335,10 @@ client.on('interactionCreate', async (interaction) => {
           ],
         },
       });
-      await safeEditReply(interaction, `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`);
+      await safeRespond(interaction, `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`);
     } catch (e) {
-      console.error('❌ Ticket-Fehler:', e?.code, e?.message);
-      await safeEditReply(interaction, '❌ Konnte Ticket nicht erstellen (Details in Logs).');
+      console.error('❌ Ticket-Fehler:', e?.code, e?.message || e);
+      await safeRespond(interaction, '❌ Konnte Ticket nicht erstellen (Details in Logs).');
     }
     return;
   }
@@ -327,11 +348,11 @@ client.on('interactionCreate', async (interaction) => {
 
   try {
     const staffRoleId = process.env.STAFF_ROLE_ID;
-    if (!staffRoleId) { await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht gesetzt.', flags: 64 }); return; }
+    if (!staffRoleId) { await safeRespond(interaction, '⚠️ STAFF_ROLE_ID nicht gesetzt.'); return; }
     const isStaff = interaction.member.roles.cache.has(staffRoleId);
-    if (!isStaff) { await interaction.reply({ content: '❌ Nur Staff darf diese Aktion nutzen.', flags: 64 }); return; }
+    if (!isStaff) { await safeRespond(interaction, '❌ Nur Staff darf diese Aktion nutzen.'); return; }
 
-    await interaction.deferReply({ flags: 64 });
+    await ensureDeferred(interaction);
 
     const channel = interaction.channel;
     const meta = readMeta(channel) || {};
@@ -341,7 +362,7 @@ client.on('interactionCreate', async (interaction) => {
     const botPerms = channel.permissionsFor(interaction.guild.members.me);
     if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
       console.error('BTN: fehlende Rechte ManageChannels in', channel.id);
-      await safeEditReply(interaction, '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.');
+      await safeRespond(interaction, '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.');
       return;
     }
 
@@ -351,18 +372,18 @@ client.on('interactionCreate', async (interaction) => {
         const msg = await channel.messages.fetch(meta.originalMessageId);
         await msg.edit({ components: [buildButtonsState(state)] });
       } catch (e) {
-        console.error('BTN: Button-Edit-Fehler', e?.code, e?.message);
+        console.error('BTN: Button-Edit-Fehler', e?.code, e?.message || e);
       }
     };
 
     if (interaction.customId === 'ticket_claim') {
-      if (meta.claimedBy) { await safeEditReply(interaction, `ℹ️ Bereits übernommen von <@${meta.claimedBy}>.`); return; }
+      if (meta.claimedBy) { await safeRespond(interaction, `ℹ️ Bereits übernommen von <@${meta.claimedBy}>.`); return; }
       meta.claimedBy = interaction.user.id;
       meta.claimedAt = Date.now();
       await writeMeta(channel, meta);
       await editButtons({ claimed: true, closed: false });
       await channel.send(`✅ <@${interaction.user.id}> **hat das Ticket übernommen.**`);
-      await safeEditReply(interaction, 'Übernahme bestätigt.');
+      await safeRespond(interaction, 'Übernahme bestätigt.');
       return;
     }
 
@@ -373,14 +394,14 @@ client.on('interactionCreate', async (interaction) => {
       await lockChannelSend(channel, applicantId);
       await editButtons({ claimed: !!meta.claimedBy, closed: true });
       await channel.send(`🔒 <@${interaction.user.id}> **hat das Ticket geschlossen.**`);
-      await safeEditReply(interaction, 'Ticket geschlossen.');
+      await safeRespond(interaction, 'Ticket geschlossen.');
       return;
     }
 
-    await safeEditReply(interaction, 'ℹ️ Unbekannte Aktion.');
+    await safeRespond(interaction, 'ℹ️ Unbekannte Aktion.');
   } catch (e) {
     console.error('BTN: Unhandled error', e?.code, e?.message || e);
-    try { await safeEditReply(interaction, '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).'); } catch {}
+    await safeRespond(interaction, '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).');
   }
 });
 
@@ -449,7 +470,7 @@ app.post('/whitelist', async (req, res) => {
 
     return res.json({ ok: true, caseId, channelId: channel.id, url: `https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` });
   } catch (e) {
-    console.error('❌ /whitelist Fehler:', e?.code, e?.message);
+    console.error('❌ /whitelist Fehler:', e?.code, e?.message || e);
     return res.status(500).json({ ok: false, error: 'server error' });
   }
 });

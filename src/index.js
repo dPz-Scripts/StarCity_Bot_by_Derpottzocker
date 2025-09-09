@@ -12,27 +12,27 @@ import {
 } from 'discord.js';
 
 /* ===========================
-   BRAND SETTINGS & HELPERS
+   VERSION & BRAND
    =========================== */
+
+const STARSTYLE_VERSION = 'StarCity style v2';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
-  color: parseInt((process.env.BRAND_COLOR || '00A2FF').replace('#',''), 16), // StarCity-Blau
-  icon: process.env.BRAND_ICON_URL || null,     // z.B. https://.../starcity-icon.png
-  banner: process.env.BRAND_BANNER_URL || null, // z.B. https://.../starcity-banner.png
+  color: parseInt((process.env.BRAND_COLOR || '00A2FF').replace('#', ''), 16),
+  icon: process.env.BRAND_ICON_URL || null,     // https://.../icon.png
+  banner: process.env.BRAND_BANNER_URL || null, // https://.../banner.png
 };
 
-const clean = (v, fallback = '—') => {
-  if (v === null || v === undefined) return fallback;
+const clean = (v, fb = '—') => {
+  if (v === null || v === undefined) return fb;
   const s = String(v).trim();
-  return s.length ? s : fallback;
+  return s.length ? s : fb;
 };
-
 const trunc = (s, n) => {
   s = clean(s, '');
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 };
-
 const makeCaseId = () => {
   const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = '';
@@ -45,14 +45,12 @@ const makeCaseId = () => {
    =========================== */
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers, // nützlich für Bewerberchecks
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
 client.once('ready', async () => {
   console.log(`✅ Eingeloggt als ${client.user.tag}`);
+  console.log(`🎨 ${STARSTYLE_VERSION}`);
   try {
     await registerSlashCommands();
     console.log('✅ Slash-Commands registriert');
@@ -73,21 +71,13 @@ async function registerSlashCommands() {
       name: 'ticket-test',
       description: 'Erstellt ein Test-Ticket (nur für dich und Staff sichtbar).',
       options: [
-        {
-          name: 'charname',
-          description: 'RP-Name der Figur',
-          type: 3, // STRING
-          required: true,
-        },
+        { name: 'charname', description: 'RP-Name der Figur', type: 3, required: true },
       ],
     },
   ];
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   const appId = (await client.application.fetch()).id;
-  await rest.put(
-    Routes.applicationGuildCommands(appId, process.env.GUILD_ID),
-    { body: commands }
-  );
+  await rest.put(Routes.applicationGuildCommands(appId, process.env.GUILD_ID), { body: commands });
 }
 
 /* ===========================
@@ -96,9 +86,7 @@ async function registerSlashCommands() {
 
 function hasNeededPermsIn(channelOrId) {
   try {
-    const perms = client.guilds.cache
-      .get(process.env.GUILD_ID)
-      ?.members?.me?.permissionsIn(channelOrId);
+    const perms = client.guilds.cache.get(process.env.GUILD_ID)?.members?.me?.permissionsIn(channelOrId);
     if (!perms) return { ok: false, missing: ['UNKNOWN'] };
     const need = [
       PermissionFlagsBits.ManageChannels,
@@ -114,8 +102,7 @@ function hasNeededPermsIn(channelOrId) {
 }
 
 /* ===========================
-   TICKET-CHANNEL ERSTELLEN
-   (StarCity-Embed, komplette Felder)
+   TICKET-CHANNEL (StarCity Style)
    =========================== */
 
 async function createTicketChannel({
@@ -129,8 +116,8 @@ async function createTicketChannel({
     alter: null,
     steamHex: '',
     discordTag: '',
-    howFound: '',     // „Wie gefunden“
-    deskItem: '',     // „Schreibtisch-Item“
+    howFound: '',
+    deskItem: '',
     timezone: '',
     answers: [],      // [{question, answer}] ODER [{key, value}]
     websiteTicketId: null,
@@ -151,23 +138,19 @@ async function createTicketChannel({
     }
   }
 
-  const safeName = (form.charName || 'bewerber')
-    .toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 20);
+  const safeName = (form.charName || 'bewerber').toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 20);
   const shortId = (form.websiteTicketId || applicantDiscordId || '0000').toString().slice(-4);
   const channelName = `whitelist-${safeName}-${shortId}`;
   const caseId = makeCaseId();
 
-  // Overwrites inkl. Bot selbst
+  // Overwrites inkl. Bot
   const overwrites = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
     { id: staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
     { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
   ];
   if (applicantDiscordId) {
-    overwrites.push({
-      id: applicantDiscordId,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-    });
+    overwrites.push({ id: applicantDiscordId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
   }
 
   let channel;
@@ -184,24 +167,21 @@ async function createTicketChannel({
     throw e;
   }
 
-  // EMBED im StarCity-Stil
+  // EMBED (StarCity)
   const embed = new EmbedBuilder()
     .setColor(BRAND.color)
     .setTitle('📨 Whitelist-Ticket eröffnet')
-    .setDescription(
-      [
-        '**Herzlich Willkommen auf StarCity!**',
-        'Schön, dass du dich für unser Projekt interessierst.',
-        'Hier ist die Zusammenfassung deiner Bewerbung:',
-        '',
-        '*(Unser Team meldet sich zeitnah bei dir. Bitte bleib in diesem Ticket.)*',
-      ].join('\n')
-    )
+    .setDescription([
+      '**Herzlich Willkommen auf StarCity!**',
+      'Schön, dass du dich für unser Projekt interessierst.',
+      'Hier ist die Zusammenfassung deiner Bewerbung:',
+      '',
+      '*(Unser Team meldet sich zeitnah bei dir. Bitte bleib in diesem Ticket.)*',
+    ].join('\n'))
     .setFooter({ text: `${caseId} • Kategorie: Whitelist` })
     .setTimestamp();
 
-  if (BRAND.icon) embed.setAuthor({ name: BRAND.name, iconURL: BRAND.icon });
-  else embed.setAuthor({ name: BRAND.name });
+  if (BRAND.icon) embed.setAuthor({ name: BRAND.name, iconURL: BRAND.icon }); else embed.setAuthor({ name: BRAND.name });
   if (BRAND.icon) embed.setThumbnail(BRAND.icon);
   if (BRAND.banner) embed.setImage(BRAND.banner);
 
@@ -220,9 +200,8 @@ async function createTicketChannel({
     { name: 'Schreibtisch-Item', value: trunc(form.deskItem, 1024) || '—', inline: false },
   );
 
-  // Fragen/Antworten
   const qa = Array.isArray(form.answers) ? form.answers : [];
-  for (let i = 0; i < qa.length && i < 12; i++) { // max. 12 Felder zusätzlich
+  for (let i = 0; i < qa.length && i < 12; i++) {
     const q = clean(qa[i].question || qa[i].key, `Frage ${i + 1}`);
     const a = clean(qa[i].answer || qa[i].value, '—');
     embed.addFields({ name: trunc(`Frage ${i + 1}: ${q}`, 256), value: trunc(a, 1024), inline: false });
@@ -243,86 +222,74 @@ async function createTicketChannel({
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName !== 'ticket-test') return;
 
-  if (interaction.commandName === 'ticket-test') {
+  try {
+    await interaction.deferReply({ flags: 64 }); // EPHEMERAL
+  } catch {
+    if (!interaction.replied) await interaction.reply({ content: '⏳ Erstelle Ticket…', flags: 64 });
+  }
+
+  try {
     const charName = interaction.options.getString('charname', true);
 
-    // Ephemeral Antwort (neues Schema via flags: 64)
-    try {
-      await interaction.deferReply({ flags: 64 });
-    } catch {
-      if (!interaction.replied) {
-        await interaction.reply({ content: '⏳ Erstelle Ticket…', flags: 64 });
-      }
-    }
+    const { channel } = await createTicketChannel({
+      guildId: process.env.GUILD_ID,
+      categoryId: process.env.TICKETS_CATEGORY_ID,
+      staffRoleId: process.env.STAFF_ROLE_ID,
+      applicantDiscordId: interaction.user.id,
+      applicantTag: `${interaction.user.username}`,
+      // Demo-Felder für sofortige Vorschau
+      form: {
+        charName,
+        alter: 19,
+        steamHex: '110000112345678',
+        discordTag: `${interaction.user.username}`,
+        howFound: 'Über einen Freund',
+        deskItem: 'Kaffee & Notizbuch',
+        timezone: 'Europe/Berlin',
+        websiteTicketId: 'SC-TEST-001',
+        answers: [
+          { question: 'Woran kannst du dich erinnern, wenn dir ein Medic geholfen hat?', answer: 'Nicht an Details der Verletzung.' },
+          { question: 'Darf der FiveM-Account geteilt werden?', answer: 'Nein.' },
+          { question: 'Max. Mitglieder in einer Fraktion?', answer: '10' },
+        ],
+      },
+    });
 
-    try {
-      const { channel } = await createTicketChannel({
-        guildId: process.env.GUILD_ID,
-        categoryId: process.env.TICKETS_CATEGORY_ID,
-        staffRoleId: process.env.STAFF_ROLE_ID,
-        applicantDiscordId: interaction.user.id,
-        applicantTag: `${interaction.user.username}`,
-        // DEMO-DATEN, damit du das Layout sofort siehst
-        form: {
-          charName,
-          alter: 19,
-          steamHex: '110000112345678',
-          discordTag: `${interaction.user.username}`,
-          howFound: 'Über einen Freund',
-          deskItem: 'Kaffee & Notizbuch',
-          timezone: 'Europe/Berlin',
-          websiteTicketId: 'SC-TEST-001',
-          answers: [
-            { question: 'Woran kannst du dich erinnern, wenn dir ein Medic geholfen hat?', answer: 'Nicht an Details der Verletzung.' },
-            { question: 'Darf der FiveM Account geteilt werden?', answer: 'Nein.' },
-            { question: 'Max. Mitglieder in einer Fraktion?', answer: '10' },
-          ],
-        },
-      });
-
-      const msg = `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`;
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply({ content: msg });
-      } else {
-        await interaction.reply({ content: msg, flags: 64 });
-      }
-    } catch (e) {
-      console.error('❌ Ticket-Fehler:', e?.code, e?.message);
-      const errTxt =
-        '❌ Konnte Ticket nicht erstellen. Prüfe Rechte & IDs.\n' +
-        '• Hat der Bot im Kategorie-Ordner **Manage Channels** + **View Channel**?\n' +
-        '• Ist `TICKETS_CATEGORY_ID` wirklich eine **Kategorie**?\n' +
-        '• Stimmt `STAFF_ROLE_ID` (existiert auf DIESEM Server)?';
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply({ content: errTxt });
-      } else {
-        await interaction.reply({ content: errTxt, flags: 64 });
-      }
-    }
+    const msg = `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`;
+    if (interaction.deferred || interaction.replied) await interaction.editReply({ content: msg });
+    else await interaction.reply({ content: msg, flags: 64 });
+  } catch (e) {
+    console.error('❌ Ticket-Fehler:', e?.code, e?.message);
+    const errTxt =
+      '❌ Konnte Ticket nicht erstellen. Prüfe Rechte & IDs.\n' +
+      '• Hat der Bot im Kategorie-Ordner **Manage Channels** + **View Channel**?\n' +
+      '• Ist `TICKETS_CATEGORY_ID` wirklich eine **Kategorie**?\n' +
+      '• Stimmt `STAFF_ROLE_ID` (Server-spezifisch)?';
+    if (interaction.deferred || interaction.replied) await interaction.editReply({ content: errTxt });
+    else await interaction.reply({ content: errTxt, flags: 64 });
   }
 });
 
 /* ===========================
-   EXPRESS: RAW JSON + HMAC
+   EXPRESS SERVER & HMAC
    =========================== */
 
 const app = express();
 
-// /health (zum schnellen prüfen)
-app.get('/health', (req, res) => res.send('StarCity Bot alive'));
+// Sichtbar prüfen:
+app.get('/health', (_req, res) => res.send('StarCity Bot alive'));
+app.get('/version', (_req, res) => res.json({ version: STARSTYLE_VERSION }));
 
-// Roh-Body + JSON parsen (für korrekte HMAC-Prüfung)
-app.use((req, res, next) => {
+// Raw JSON (für HMAC)
+app.use((req, _res, next) => {
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
   req.on('end', () => {
     req.rawBody = Buffer.concat(chunks);
-    try {
-      req.body = JSON.parse(req.rawBody.toString('utf8') || '{}');
-    } catch {
-      req.body = {};
-    }
+    try { req.body = JSON.parse(req.rawBody.toString('utf8') || '{}'); }
+    catch { req.body = {}; }
     next();
   });
 });
@@ -333,17 +300,12 @@ function isValidSignature(rawBody, signatureHex, secret) {
   const digest = hmac.digest('hex');
   if (!signatureHex) return false;
   try {
-    return crypto.timingSafeEqual(
-      Buffer.from(digest, 'hex'),
-      Buffer.from(signatureHex, 'hex')
-    );
-  } catch {
-    return false;
-  }
+    return crypto.timingSafeEqual(Buffer.from(digest, 'hex'), Buffer.from(signatureHex, 'hex'));
+  } catch { return false; }
 }
 
 /* ===========================
-   POST /whitelist  (von Website)
+   POST /whitelist
    =========================== */
 
 app.post('/whitelist', async (req, res) => {
@@ -359,15 +321,14 @@ app.post('/whitelist', async (req, res) => {
       charName,
       steamHex,
       alter,
-      erfahrung,        // "Wie gefunden"
-      motivation,       // "Schreibtisch-Item"
+      erfahrung,        // „Wie gefunden“
+      motivation,       // „Schreibtisch-Item“
       timezone,
       websiteTicketId,
-      answers,          // Array [{question, answer}] ODER [{key, value}]
+      answers,          // [{question, answer}] ODER [{key, value}]
     } = req.body;
 
-    if (!charName)
-      return res.status(400).json({ ok: false, error: 'charName required' });
+    if (!charName) return res.status(400).json({ ok: false, error: 'charName required' });
 
     const { channel, caseId } = await createTicketChannel({
       guildId: process.env.GUILD_ID,
@@ -401,9 +362,10 @@ app.post('/whitelist', async (req, res) => {
 });
 
 /* ===========================
-   START SERVER
+   START
    =========================== */
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log(`🌐 Webhook-Server läuft auf Port ${process.env.PORT || 3000}`);
+const PORT = Number(process.env.PORT || 3000);
+app.listen(PORT, () => {
+  console.log(`🌐 Webhook-Server läuft auf Port ${PORT}`);
 });

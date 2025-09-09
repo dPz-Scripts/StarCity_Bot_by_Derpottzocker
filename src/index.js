@@ -14,8 +14,7 @@ import {
 /* ===========================
    VERSION & BRAND
    =========================== */
-
-const STARSTYLE_VERSION = 'StarCity style v2';
+const STARSTYLE_VERSION = 'StarCity style v3';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
@@ -43,7 +42,6 @@ const makeCaseId = () => {
 /* ===========================
    DISCORD CLIENT
    =========================== */
-
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
@@ -64,15 +62,12 @@ client.login(process.env.DISCORD_TOKEN);
 /* ===========================
    SLASH COMMANDS
    =========================== */
-
 async function registerSlashCommands() {
   const commands = [
     {
       name: 'ticket-test',
       description: 'Erstellt ein Test-Ticket (nur für dich und Staff sichtbar).',
-      options: [
-        { name: 'charname', description: 'RP-Name der Figur', type: 3, required: true },
-      ],
+      options: [{ name: 'charname', description: 'RP-Name der Figur', type: 3, required: true }],
     },
   ];
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -83,7 +78,6 @@ async function registerSlashCommands() {
 /* ===========================
    PERMISSION CHECK (optional)
    =========================== */
-
 function hasNeededPermsIn(channelOrId) {
   try {
     const perms = client.guilds.cache.get(process.env.GUILD_ID)?.members?.me?.permissionsIn(channelOrId);
@@ -104,7 +98,6 @@ function hasNeededPermsIn(channelOrId) {
 /* ===========================
    TICKET-CHANNEL (StarCity Style)
    =========================== */
-
 async function createTicketChannel({
   guildId,
   categoryId,
@@ -217,17 +210,18 @@ async function createTicketChannel({
 }
 
 /* ===========================
-   SLASH HANDLER
+   SLASH HANDLER (fix: nur 1x ack)
    =========================== */
-
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName !== 'ticket-test') return;
 
+  // **Nur EIN mal bestätigen**
   try {
     await interaction.deferReply({ flags: 64 }); // EPHEMERAL
-  } catch {
-    if (!interaction.replied) await interaction.reply({ content: '⏳ Erstelle Ticket…', flags: 64 });
+  } catch (e) {
+    console.error('❌ deferReply fehlgeschlagen:', e?.code, e?.message);
+    return; // nicht nochmal reply versuchen -> sonst 40060
   }
 
   try {
@@ -257,25 +251,22 @@ client.on('interactionCreate', async (interaction) => {
       },
     });
 
-    const msg = `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`;
-    if (interaction.deferred || interaction.replied) await interaction.editReply({ content: msg });
-    else await interaction.reply({ content: msg, flags: 64 });
+    await interaction.editReply({ content: `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` });
   } catch (e) {
     console.error('❌ Ticket-Fehler:', e?.code, e?.message);
-    const errTxt =
-      '❌ Konnte Ticket nicht erstellen. Prüfe Rechte & IDs.\n' +
-      '• Hat der Bot im Kategorie-Ordner **Manage Channels** + **View Channel**?\n' +
-      '• Ist `TICKETS_CATEGORY_ID` wirklich eine **Kategorie**?\n' +
-      '• Stimmt `STAFF_ROLE_ID` (Server-spezifisch)?';
-    if (interaction.deferred || interaction.replied) await interaction.editReply({ content: errTxt });
-    else await interaction.reply({ content: errTxt, flags: 64 });
+    await interaction.editReply({
+      content:
+        '❌ Konnte Ticket nicht erstellen. Prüfe Rechte & IDs.\n' +
+        '• Hat der Bot im Kategorie-Ordner **Manage Channels** + **View Channel**?\n' +
+        '• Ist `TICKETS_CATEGORY_ID` wirklich eine **Kategorie**?\n' +
+        '• Stimmt `STAFF_ROLE_ID` (Server-spezifisch)?',
+    });
   }
 });
 
 /* ===========================
    EXPRESS SERVER & HMAC
    =========================== */
-
 const app = express();
 
 // Sichtbar prüfen:
@@ -307,7 +298,6 @@ function isValidSignature(rawBody, signatureHex, secret) {
 /* ===========================
    POST /whitelist
    =========================== */
-
 app.post('/whitelist', async (req, res) => {
   try {
     const sig = req.headers['x-signature'];
@@ -364,7 +354,6 @@ app.post('/whitelist', async (req, res) => {
 /* ===========================
    START
    =========================== */
-
 const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {
   console.log(`🌐 Webhook-Server läuft auf Port ${PORT}`);

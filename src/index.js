@@ -17,7 +17,7 @@ import {
 /* ===========================
    VERSION & BRAND
    =========================== */
-const STARSTYLE_VERSION = 'StarCity style v6.5';
+const STARSTYLE_VERSION = 'StarCity style v6.6';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
@@ -54,38 +54,35 @@ const normalizeAnswers = (raw) => {
     .filter((x) => x.a !== '—');
 };
 
-/* ---------- ACK-SICHERE ANTWORTEN ---------- */
+// ---------- Antwort-Helfer ----------
 const toPayload = (x) => (typeof x === 'string' ? { content: x } : (x || { content: 'OK' }));
 
-async function ensureDeferred(interaction, { ephemeral = true } = {}) {
+// ackNow: sofortiges, ephemeres Ack (verhindert Spinner). Gibt "replied" zurück, wenn geantwortet wurde.
+async function ackNow(interaction) {
   try {
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply({ flags: ephemeral ? 64 : undefined });
+      await interaction.reply({ content: '⏳ …', flags: 64 });
+      return 'replied';
     }
   } catch (e) {
-    // wenn schon acknowledged → egal
+    // already acknowledged → ignorieren
   }
+  return 'noop';
 }
 
-async function safeRespond(interaction, payload, { ephemeral = true } = {}) {
+async function editOrFollowUp(interaction, payload) {
   const data = toPayload(payload);
   try {
-    if (interaction.deferred) {
+    if (interaction.deferred || interaction.replied) {
       await interaction.editReply(data);
-      return;
+    } else {
+      await interaction.reply({ ...data, flags: 64 });
     }
-    if (interaction.replied) {
-      await interaction.followUp({ ...data, flags: ephemeral ? 64 : undefined });
-      return;
-    }
-    await interaction.reply({ ...data, flags: ephemeral ? 64 : undefined });
   } catch (e) {
-    // Fallback, falls Token abgelaufen/ungültig etc.
     if (e?.code === 50027 || e?.status === 401) {
       try { await interaction.channel?.send(data); } catch {}
     } else if (e?.code === 40060) {
-      // already acknowledged → followUp probieren
-      try { await interaction.followUp({ ...data, flags: ephemeral ? 64 : undefined }); } catch {}
+      try { await interaction.followUp({ ...data, flags: 64 }); } catch {}
     } else {
       console.error('RESP ERROR:', e?.code, e?.message || e);
     }
@@ -310,7 +307,8 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName !== 'ticket-test') return;
 
-    await ensureDeferred(interaction);
+    // sofort acken
+    await ackNow(interaction);
     try {
       const charName = interaction.options.getString('charname', true);
       const { channel } = await createTicketChannel({
@@ -335,10 +333,10 @@ client.on('interactionCreate', async (interaction) => {
           ],
         },
       });
-      await safeRespond(interaction, `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`);
+      await editOrFollowUp(interaction, `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`);
     } catch (e) {
       console.error('❌ Ticket-Fehler:', e?.code, e?.message || e);
-      await safeRespond(interaction, '❌ Konnte Ticket nicht erstellen (Details in Logs).');
+      await editOrFollowUp(interaction, '❌ Konnte Ticket nicht erstellen (Details in Logs).');
     }
     return;
   }
@@ -346,13 +344,23 @@ client.on('interactionCreate', async (interaction) => {
   // Buttons
   if (!interaction.isButton()) return;
 
+  // — Logging: wer/wo/was —
+  try {
+    console.log(
+      `BTN: click ${interaction.customId} by ${interaction.user?.tag || interaction.user?.id} in #${interaction.channel?.id} (replied:${interaction.replied} deferred:${interaction.deferred})`
+    );
+  } catch {}
+
   try {
     const staffRoleId = process.env.STAFF_ROLE_ID;
-    if (!staffRoleId) { await safeRespond(interaction, '⚠️ STAFF_ROLE_ID nicht gesetzt.'); return; }
-    const isStaff = interaction.member.roles.cache.has(staffRoleId);
-    if (!isStaff) { await safeRespond(interaction, '❌ Nur Staff darf diese Aktion nutzen.'); return; }
+    if (!staffRoleId) { await editOrFollowUp(interaction, '⚠️ STAFF_ROLE_ID nicht gesetzt.'); return; }
 
-    await ensureDeferred(interaction);
+    // sofort ack (⏳)
+    await ackNow(interaction);
+
+    // Staff-Check
+    const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
+    if (!isStaff) { await editOrFollowUp(interaction, '❌ Nur Staff darf diese Aktion nutzen.'); return; }
 
     const channel = interaction.channel;
     const meta = readMeta(channel) || {};
@@ -360,9 +368,10 @@ client.on('interactionCreate', async (interaction) => {
 
     // Bot-Rechte
     const botPerms = channel.permissionsFor(interaction.guild.members.me);
-    if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
+    const hasManage = !!botPerms?.has(PermissionFlagsBits.ManageChannels);
+    if (!hasManage) {
       console.error('BTN: fehlende Rechte ManageChannels in', channel.id);
-      await safeRespond(interaction, '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.');
+      await editOrFollowUp(interaction, '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.');
       return;
     }
 
@@ -377,13 +386,13 @@ client.on('interactionCreate', async (interaction) => {
     };
 
     if (interaction.customId === 'ticket_claim') {
-      if (meta.claimedBy) { await safeRespond(interaction, `ℹ️ Bereits übernommen von <@${meta.claimedBy}>.`); return; }
+      if (meta.claimedBy) { await editOrFollowUp(interaction, `ℹ️ Bereits übernommen von <@${meta.claimedBy}>.`); return; }
       meta.claimedBy = interaction.user.id;
       meta.claimedAt = Date.now();
       await writeMeta(channel, meta);
       await editButtons({ claimed: true, closed: false });
       await channel.send(`✅ <@${interaction.user.id}> **hat das Ticket übernommen.**`);
-      await safeRespond(interaction, 'Übernahme bestätigt.');
+      await editOrFollowUp(interaction, 'Übernahme bestätigt.');
       return;
     }
 
@@ -394,14 +403,14 @@ client.on('interactionCreate', async (interaction) => {
       await lockChannelSend(channel, applicantId);
       await editButtons({ claimed: !!meta.claimedBy, closed: true });
       await channel.send(`🔒 <@${interaction.user.id}> **hat das Ticket geschlossen.**`);
-      await safeRespond(interaction, 'Ticket geschlossen.');
+      await editOrFollowUp(interaction, 'Ticket geschlossen.');
       return;
     }
 
-    await safeRespond(interaction, 'ℹ️ Unbekannte Aktion.');
+    await editOrFollowUp(interaction, 'ℹ️ Unbekannte Aktion.');
   } catch (e) {
     console.error('BTN: Unhandled error', e?.code, e?.message || e);
-    await safeRespond(interaction, '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).');
+    await editOrFollowUp(interaction, '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).');
   }
 });
 

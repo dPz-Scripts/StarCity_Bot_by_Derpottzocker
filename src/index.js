@@ -626,10 +626,18 @@ client.on('interactionCreate', async (interaction) => {
           console.log(`[${traceId}] Sende Channel-Nachricht`);
           try {
             const channelMessage = `✅ **Ticket übernommen**\n\n<@${interaction.user.id}> hat das Ticket übernommen.\nEs wird sich nun um deine Angelegenheiten gekümmert. Habe jedoch Geduld, wenn dir nicht immer sofort geantwortet wird.`;
-            await channel.send(channelMessage);
-            console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet: ${channelMessage}`);
+            const fetchedChannel = await interaction.guild.channels.fetch(channel.id).catch(() => null);
+            const canSend = fetchedChannel?.permissionsFor(interaction.guild.members.me)?.has(PermissionFlagsBits.SendMessages);
+            if (fetchedChannel && canSend) {
+              await fetchedChannel.send(channelMessage);
+              console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet: ${channelMessage}`);
+            } else {
+              console.warn(`[${traceId}] Kann keine Channel-Nachricht senden (fehlende Rechte?)`);
+              await interaction.followUp({ content: '⚠️ Konnte keine Nachricht im Channel posten (fehlende Rechte?).', flags: 64 });
+            }
           } catch (channelError) {
             console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht:`, channelError);
+            try { await interaction.followUp({ content: '⚠️ Fehler beim Posten der Channel-Nachricht.', flags: 64 }); } catch {}
           }
           
           return;
@@ -687,10 +695,18 @@ client.on('interactionCreate', async (interaction) => {
           console.log(`[${traceId}] Sende Channel-Nachricht`);
           try {
             const channelMessage = `🔒 **Ticket geschlossen**\n\n<@${interaction.user.id}> hat das Ticket geschlossen.\nVielen Dank für deine Bewerbung bei StarCity!`;
-            await channel.send(channelMessage);
-            console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet: ${channelMessage}`);
+            const fetchedChannel = await interaction.guild.channels.fetch(channel.id).catch(() => null);
+            const canSend = fetchedChannel?.permissionsFor(interaction.guild.members.me)?.has(PermissionFlagsBits.SendMessages);
+            if (fetchedChannel && canSend) {
+              await fetchedChannel.send(channelMessage);
+              console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet: ${channelMessage}`);
+            } else {
+              console.warn(`[${traceId}] Kann keine Channel-Nachricht senden (fehlende Rechte?)`);
+              await interaction.followUp({ content: '⚠️ Konnte keine Nachricht im Channel posten (fehlende Rechte?).', flags: 64 });
+            }
           } catch (channelError) {
             console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht:`, channelError);
+            try { await interaction.followUp({ content: '⚠️ Fehler beim Posten der Channel-Nachricht.', flags: 64 }); } catch {}
           }
           
           return;
@@ -737,40 +753,58 @@ client.on('interactionCreate', async (interaction) => {
       
       if (interaction.customId === 'ticket_rename_modal') {
         try {
-          const newName = interaction.fields.getTextInputValue('new_channel_name');
-          console.log(`[${traceId}] Neuer Channel-Name: ${newName}`);
-          
+          const rawName = interaction.fields.getTextInputValue('new_channel_name');
+          const sanitized = rawName
+            .toLowerCase()
+            .trim()
+            .replace(/\s+/g, '-')
+            .replace(/[^a-z0-9-]/g, '-')
+            .replace(/-{2,}/g, '-')
+            .slice(0, 100) || 'ticket';
+          console.log(`[${traceId}] Neuer Channel-Name (sanitized): ${sanitized} (raw: ${rawName})`);
+
+          const oldName = interaction.channel.name;
+
+          // Antwort deferren, um Timeout zu vermeiden
+          await interaction.deferReply({ flags: 64 });
+
           // Channel umbenennen
-          await interaction.channel.setName(newName);
-          console.log(`[${traceId}] Channel erfolgreich umbenannt zu: ${newName}`);
+          await interaction.channel.setName(sanitized);
+          console.log(`[${traceId}] Channel erfolgreich umbenannt zu: ${sanitized}`);
           
           // Meta aktualisieren
           const meta = readTicketMeta(interaction.channel);
           meta.renamedBy = interaction.user.id;
           meta.renamedAt = Date.now();
-          meta.originalName = channel.name; // Verwende den ursprünglichen Namen
+          meta.originalName = oldName;
           await writeTicketMeta(interaction.channel, meta);
           
           // Ephemere Bestätigung
-          await interaction.reply({ 
-            content: `✅ Channel erfolgreich umbenannt zu: **${newName}**`, 
-            flags: 64 
+          await interaction.editReply({ 
+            content: `✅ Channel erfolgreich umbenannt zu: **${sanitized}**` 
           });
           
           // Channel-Nachricht
           try {
-            await interaction.channel.send(`✏️ **Channel umbenannt**\n<@${interaction.user.id}> hat den Channel zu **${newName}** umbenannt.`);
-            console.log(`[${traceId}] Channel-Nachricht für Umbenennung erfolgreich gesendet`);
+            const fetchedChannel = await interaction.guild.channels.fetch(interaction.channelId).catch(() => null);
+            const canSend = fetchedChannel?.permissionsFor(interaction.guild.members.me)?.has(PermissionFlagsBits.SendMessages);
+            if (fetchedChannel && canSend) {
+              await fetchedChannel.send(`✏️ **Channel umbenannt**\n<@${interaction.user.id}> hat den Channel zu **${sanitized}** umbenannt.`);
+              console.log(`[${traceId}] Channel-Nachricht für Umbenennung erfolgreich gesendet`);
+            } else {
+              console.warn(`[${traceId}] Kann keine Channel-Nachricht senden (fehlende Rechte?)`);
+            }
           } catch (channelError) {
             console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht für Umbenennung:`, channelError);
           }
           
         } catch (error) {
           console.error(`[${traceId}] Fehler beim Umbenennen:`, error);
-          await interaction.reply({ 
-            content: '❌ Fehler beim Umbenennen des Channels.', 
-            flags: 64 
-          });
+          if (!interaction.deferred && !interaction.replied) {
+            await interaction.reply({ content: '❌ Fehler beim Umbenennen des Channels.', flags: 64 });
+          } else {
+            await interaction.editReply({ content: '❌ Fehler beim Umbenennen des Channels.' });
+          }
         }
         return;
       }

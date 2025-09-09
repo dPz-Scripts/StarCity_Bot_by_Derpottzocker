@@ -12,6 +12,9 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from 'discord.js';
 
 /* ===========================
@@ -213,6 +216,15 @@ function buildTicketButtons({ claimed = false, closed = false } = {}) {
         .setEmoji(claimed ? '✅' : '👋')
         .setStyle(claimed ? ButtonStyle.Secondary : ButtonStyle.Success)
         .setDisabled(claimed)
+    );
+    
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId('ticket_rename')
+        .setLabel('Umbenennen')
+        .setEmoji('✏️')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(closed)
     );
   }
   
@@ -551,8 +563,9 @@ client.on('interactionCreate', async (interaction) => {
           // Channel-Nachricht
           console.log(`[${traceId}] Sende Channel-Nachricht`);
           try {
-            await channel.send(`✅ **Ticket übernommen**\n<@${interaction.user.id}> hat das Ticket übernommen und wird sich um deine Bewerbung kümmern.`);
-            console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet`);
+            const channelMessage = `✅ **Ticket übernommen**\n<@${interaction.user.id}> hat das Ticket übernommen und wird sich um deine Bewerbung kümmern.`;
+            await channel.send(channelMessage);
+            console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet: ${channelMessage}`);
           } catch (channelError) {
             console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht:`, channelError);
           }
@@ -603,12 +616,37 @@ client.on('interactionCreate', async (interaction) => {
           // Channel-Nachricht
           console.log(`[${traceId}] Sende Channel-Nachricht`);
           try {
-            await channel.send(`🔒 **Ticket geschlossen**\n<@${interaction.user.id}> hat das Ticket geschlossen.`);
-            console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet`);
+            const channelMessage = `🔒 **Ticket geschlossen**\n<@${interaction.user.id}> hat das Ticket geschlossen.`;
+            await channel.send(channelMessage);
+            console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet: ${channelMessage}`);
           } catch (channelError) {
             console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht:`, channelError);
           }
           
+          return;
+        }
+
+        if (interaction.customId === 'ticket_rename') {
+          console.log(`[${traceId}] Verarbeite Ticket-Umbenennung`);
+          
+          // Modal für neue Channel-Namen erstellen
+          const modal = new ModalBuilder()
+            .setCustomId('ticket_rename_modal')
+            .setTitle('Ticket umbenennen');
+
+          const nameInput = new TextInputBuilder()
+            .setCustomId('new_channel_name')
+            .setLabel('Neuer Channel-Name')
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('z.B. whitelist-max-mustermann-1234')
+            .setValue(channel.name)
+            .setRequired(true)
+            .setMaxLength(100);
+
+          const actionRow = new ActionRowBuilder().addComponents(nameInput);
+          modal.addComponents(actionRow);
+
+          await interaction.showModal(modal);
           return;
         }
 
@@ -620,6 +658,46 @@ client.on('interactionCreate', async (interaction) => {
         if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({ content: '❌ Fehler bei der Button-Aktion.', flags: 64 });
         }
+      }
+    }
+
+    // MODAL SUBMITS
+    if (interaction.isModalSubmit()) {
+      console.log(`[${traceId}] Modal-Submit: ${interaction.customId}`);
+      
+      if (interaction.customId === 'ticket_rename_modal') {
+        try {
+          const newName = interaction.fields.getTextInputValue('new_channel_name');
+          console.log(`[${traceId}] Neuer Channel-Name: ${newName}`);
+          
+          // Channel umbenennen
+          await interaction.channel.setName(newName);
+          console.log(`[${traceId}] Channel erfolgreich umbenannt zu: ${newName}`);
+          
+          // Meta aktualisieren
+          const meta = readTicketMeta(interaction.channel);
+          meta.renamedBy = interaction.user.id;
+          meta.renamedAt = Date.now();
+          meta.originalName = interaction.channel.name;
+          await writeTicketMeta(interaction.channel, meta);
+          
+          // Ephemere Bestätigung
+          await interaction.reply({ 
+            content: `✅ Channel erfolgreich umbenannt zu: **${newName}**`, 
+            flags: 64 
+          });
+          
+          // Channel-Nachricht
+          await interaction.channel.send(`✏️ **Channel umbenannt**\n<@${interaction.user.id}> hat den Channel zu **${newName}** umbenannt.`);
+          
+        } catch (error) {
+          console.error(`[${traceId}] Fehler beim Umbenennen:`, error);
+          await interaction.reply({ 
+            content: '❌ Fehler beim Umbenennen des Channels.', 
+            flags: 64 
+          });
+        }
+        return;
       }
     }
 

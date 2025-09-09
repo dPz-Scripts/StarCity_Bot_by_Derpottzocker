@@ -126,6 +126,38 @@ class IdempotencyManager {
 const idempotency = new IdempotencyManager();
 
 /* ===========================
+   TICKET META STORAGE
+   =========================== */
+class TicketMetaStorage {
+  constructor() {
+    this.meta = new Map();
+  }
+
+  set(channelId, meta) {
+    this.meta.set(channelId, meta);
+  }
+
+  get(channelId) {
+    return this.meta.get(channelId) || {
+      caseId: null,
+      applicantDiscordId: null,
+      createdAt: Date.now(),
+      claimedBy: null,
+      claimedAt: null,
+      closedBy: null,
+      closedAt: null,
+      status: 'open'
+    };
+  }
+
+  delete(channelId) {
+    this.meta.delete(channelId);
+  }
+}
+
+const ticketMetaStorage = new TicketMetaStorage();
+
+/* ===========================
    DISCORD CLIENT
    =========================== */
 const client = new Client({
@@ -259,16 +291,38 @@ async function lockChannel(channel, applicantId) {
 
 function readTicketMeta(channel) {
   try {
-    return JSON.parse(channel.topic || '{}');
+    // Versuche zuerst aus der neuen Storage zu lesen
+    const meta = ticketMetaStorage.get(channel.id);
+    if (meta.caseId) {
+      return meta;
+    }
+    
+    // Fallback: Versuche JSON aus dem Topic zu parsen (für alte Tickets)
+    const topic = channel.topic || '';
+    if (topic.startsWith('{')) {
+      const parsedMeta = JSON.parse(topic);
+      // Speichere in der neuen Storage für zukünftige Verwendung
+      ticketMetaStorage.set(channel.id, parsedMeta);
+      return parsedMeta;
+    }
+    
+    // Für neue Tickets ohne Meta-Daten
+    return meta;
   } catch {
-    return {};
+    return ticketMetaStorage.get(channel.id);
   }
 }
 
 async function writeTicketMeta(channel, meta) {
   try {
     console.log(`Schreibe Meta-Daten für Channel ${channel.id}:`, meta);
-    await channel.setTopic(JSON.stringify(meta));
+    
+    // Speichere Meta-Daten in der Storage
+    ticketMetaStorage.set(channel.id, meta);
+    
+    // Verwende einen benutzerfreundlichen Topic-Text anstatt JSON
+    const topicText = `🎫 Whitelist-Ticket ${meta.caseId} | Status: ${meta.status} | Bewerber: ${meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt'}`;
+    await channel.setTopic(topicText);
     console.log(`Meta-Daten erfolgreich gespeichert für Channel ${channel.id}`);
   } catch (error) {
     console.error(`Fehler beim Speichern der Meta-Daten für Channel ${channel.id}:`, error);
@@ -563,7 +617,7 @@ client.on('interactionCreate', async (interaction) => {
           
           try {
             await writeTicketMeta(channel, meta);
-            console.log(`[${traceId}] Meta-Daten erfolgreich aktualisiert`);
+            console.log(`[${traceId}] Meta-Daten erfolgreich aktualisiert:`, meta);
           } catch (metaError) {
             console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
           }
@@ -694,7 +748,7 @@ client.on('interactionCreate', async (interaction) => {
           const meta = readTicketMeta(interaction.channel);
           meta.renamedBy = interaction.user.id;
           meta.renamedAt = Date.now();
-          meta.originalName = interaction.channel.name;
+          meta.originalName = channel.name; // Verwende den ursprünglichen Namen
           await writeTicketMeta(interaction.channel, meta);
           
           // Ephemere Bestätigung
@@ -704,7 +758,12 @@ client.on('interactionCreate', async (interaction) => {
           });
           
           // Channel-Nachricht
-          await interaction.channel.send(`✏️ **Channel umbenannt**\n<@${interaction.user.id}> hat den Channel zu **${newName}** umbenannt.`);
+          try {
+            await interaction.channel.send(`✏️ **Channel umbenannt**\n<@${interaction.user.id}> hat den Channel zu **${newName}** umbenannt.`);
+            console.log(`[${traceId}] Channel-Nachricht für Umbenennung erfolgreich gesendet`);
+          } catch (channelError) {
+            console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht für Umbenennung:`, channelError);
+          }
           
         } catch (error) {
           console.error(`[${traceId}] Fehler beim Umbenennen:`, error);
@@ -845,5 +904,6 @@ app.listen(PORT, () => {
 process.on('SIGINT', () => {
   console.log('🛑 Shutdown signal empfangen...');
   idempotency.destroy();
+  ticketMetaStorage.meta.clear();
   process.exit(0);
 });

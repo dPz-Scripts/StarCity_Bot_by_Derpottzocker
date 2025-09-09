@@ -534,13 +534,21 @@ client.on('interactionCreate', async (interaction) => {
 
           // ZUERST ephemere Antwort senden
           console.log(`[${traceId}] Sende ephemere Bestätigung`);
-          await interaction.reply({ content: '✅ Ticket erfolgreich übernommen!', flags: 64 });
+          try {
+            await interaction.reply({ content: '✅ Ticket erfolgreich übernommen!', flags: 64 });
+            console.log(`[${traceId}] Ephemere Antwort erfolgreich gesendet`);
+          } catch (replyError) {
+            console.error(`[${traceId}] Fehler bei ephemere Antwort:`, replyError);
+            return; // Bei Reply-Fehler abbrechen
+          }
 
           // Dann Buttons aktualisieren
           console.log(`[${traceId}] Aktualisiere Buttons`);
           try {
+            const newButtons = buildTicketButtons({ claimed: true, closed: false });
+            console.log(`[${traceId}] Neue Buttons erstellt:`, newButtons.components.map(b => b.data.label));
             await interaction.message.edit({ 
-              components: [buildTicketButtons({ claimed: true, closed: false })] 
+              components: [newButtons] 
             });
             console.log(`[${traceId}] Buttons erfolgreich aktualisiert`);
           } catch (buttonError) {
@@ -563,7 +571,7 @@ client.on('interactionCreate', async (interaction) => {
           // Channel-Nachricht
           console.log(`[${traceId}] Sende Channel-Nachricht`);
           try {
-            const channelMessage = `✅ **Ticket übernommen**\n<@${interaction.user.id}> hat das Ticket übernommen und wird sich um deine Bewerbung kümmern.`;
+            const channelMessage = `✅ **Ticket übernommen**\n\n<@${interaction.user.id}> hat das Ticket übernommen.\nEs wird sich nun um deine Angelegenheiten gekümmert. Habe jedoch Geduld, wenn dir nicht immer sofort geantwortet wird.`;
             await channel.send(channelMessage);
             console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet: ${channelMessage}`);
           } catch (channelError) {
@@ -578,13 +586,21 @@ client.on('interactionCreate', async (interaction) => {
           
           // ZUERST ephemere Antwort senden
           console.log(`[${traceId}] Sende ephemere Bestätigung`);
-          await interaction.reply({ content: '🔒 Ticket erfolgreich geschlossen!', flags: 64 });
+          try {
+            await interaction.reply({ content: '🔒 Ticket erfolgreich geschlossen!', flags: 64 });
+            console.log(`[${traceId}] Ephemere Antwort erfolgreich gesendet`);
+          } catch (replyError) {
+            console.error(`[${traceId}] Fehler bei ephemere Antwort:`, replyError);
+            return; // Bei Reply-Fehler abbrechen
+          }
 
           // Dann Buttons aktualisieren
           console.log(`[${traceId}] Aktualisiere Buttons`);
           try {
+            const newButtons = buildTicketButtons({ claimed: !!meta.claimedBy, closed: true });
+            console.log(`[${traceId}] Neue Buttons erstellt:`, newButtons.components.map(b => b.data.label));
             await interaction.message.edit({ 
-              components: [buildTicketButtons({ claimed: !!meta.claimedBy, closed: true })] 
+              components: [newButtons] 
             });
             console.log(`[${traceId}] Buttons erfolgreich aktualisiert`);
           } catch (buttonError) {
@@ -616,7 +632,7 @@ client.on('interactionCreate', async (interaction) => {
           // Channel-Nachricht
           console.log(`[${traceId}] Sende Channel-Nachricht`);
           try {
-            const channelMessage = `🔒 **Ticket geschlossen**\n<@${interaction.user.id}> hat das Ticket geschlossen.`;
+            const channelMessage = `🔒 **Ticket geschlossen**\n\n<@${interaction.user.id}> hat das Ticket geschlossen.\nVielen Dank für deine Bewerbung bei StarCity!`;
             await channel.send(channelMessage);
             console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet: ${channelMessage}`);
           } catch (channelError) {

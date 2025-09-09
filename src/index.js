@@ -11,7 +11,39 @@ import {
   EmbedBuilder,
 } from 'discord.js';
 
-// ---- DISCORD CLIENT ----
+/* ===========================
+   BRAND SETTINGS & HELPERS
+   =========================== */
+
+const BRAND = {
+  name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
+  color: parseInt((process.env.BRAND_COLOR || '00A2FF').replace('#',''), 16), // StarCity-Blau
+  icon: process.env.BRAND_ICON_URL || null,     // z.B. https://.../starcity-icon.png
+  banner: process.env.BRAND_BANNER_URL || null, // z.B. https://.../starcity-banner.png
+};
+
+const clean = (v, fallback = '—') => {
+  if (v === null || v === undefined) return fallback;
+  const s = String(v).trim();
+  return s.length ? s : fallback;
+};
+
+const trunc = (s, n) => {
+  s = clean(s, '');
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+};
+
+const makeCaseId = () => {
+  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < 8; i++) out += abc[Math.floor(Math.random() * abc.length)];
+  return `#T-${out}`;
+};
+
+/* ===========================
+   DISCORD CLIENT
+   =========================== */
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -31,7 +63,10 @@ client.once('ready', async () => {
 
 client.login(process.env.DISCORD_TOKEN);
 
-// ---- SLASH COMMANDS REGISTRIEREN ----
+/* ===========================
+   SLASH COMMANDS
+   =========================== */
+
 async function registerSlashCommands() {
   const commands = [
     {
@@ -48,16 +83,17 @@ async function registerSlashCommands() {
     },
   ];
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+  const appId = (await client.application.fetch()).id;
   await rest.put(
-    Routes.applicationGuildCommands(
-      (await client.application.fetch()).id,
-      process.env.GUILD_ID
-    ),
+    Routes.applicationGuildCommands(appId, process.env.GUILD_ID),
     { body: commands }
   );
 }
 
-// ---- PERMISSIONS-CHECK im (potenziellen) Parent ----
+/* ===========================
+   PERMISSION CHECK (optional)
+   =========================== */
+
 function hasNeededPermsIn(channelOrId) {
   try {
     const perms = client.guilds.cache
@@ -77,85 +113,63 @@ function hasNeededPermsIn(channelOrId) {
   }
 }
 
-// ---- HELFER: Ticket-Channel erstellen ----
+/* ===========================
+   TICKET-CHANNEL ERSTELLEN
+   (StarCity-Embed, komplette Felder)
+   =========================== */
+
 async function createTicketChannel({
   guildId,
   categoryId,
   staffRoleId,
   applicantDiscordId,
   applicantTag = '—',
-  charName,
-  fields = {},
-  websiteTicketId = null,
+  form = {
+    charName: '',
+    alter: null,
+    steamHex: '',
+    discordTag: '',
+    howFound: '',     // „Wie gefunden“
+    deskItem: '',     // „Schreibtisch-Item“
+    timezone: '',
+    answers: [],      // [{question, answer}] ODER [{key, value}]
+    websiteTicketId: null,
+  },
 }) {
   const guild = await client.guilds.fetch(guildId);
 
-  // Kategorie validieren & Berechtigungen prüfen
+  // Kategorie validieren
   let parent = undefined;
   if (categoryId) {
     const cat = await guild.channels.fetch(categoryId).catch(() => null);
     if (cat && cat.type === ChannelType.GuildCategory) {
       const check = hasNeededPermsIn(cat.id);
-      if (check.ok) {
-        parent = cat.id;
-      } else {
-        console.warn(
-          `⚠️ Mir fehlen im Kategorie-Ordner Rechte: ${check.missing
-            .map((m) => PermissionFlagsBits[m] ?? m)
-            .join(', ')}. Erstelle Ticket OHNE Kategorie.`
-        );
-      }
+      if (check.ok) parent = cat.id;
+      else console.warn('⚠️ Mir fehlen im Kategorie-Ordner Rechte. Erstelle Ticket OHNE parent.');
     } else {
       console.warn('⚠️ TICKETS_CATEGORY_ID ist keine Kategorie. Erstelle ohne parent.');
     }
   }
 
-  // Channelname
-  const safeName = (charName || 'bewerber')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .slice(0, 20);
-  const shortId = (websiteTicketId || applicantDiscordId || '0000')
-    .toString()
-    .slice(-4);
+  const safeName = (form.charName || 'bewerber')
+    .toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 20);
+  const shortId = (form.websiteTicketId || applicantDiscordId || '0000').toString().slice(-4);
   const channelName = `whitelist-${safeName}-${shortId}`;
+  const caseId = makeCaseId();
 
-  // Rechte setzen (inkl. Bot selbst!)
+  // Overwrites inkl. Bot selbst
   const overwrites = [
-    {
-      id: guild.roles.everyone.id,
-      deny: [PermissionFlagsBits.ViewChannel],
-    },
-    {
-      id: staffRoleId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-      ],
-    },
-    {
-      id: client.user.id,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-      ],
-    },
+    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+    { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
   ];
-
   if (applicantDiscordId) {
     overwrites.push({
       id: applicantDiscordId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-      ],
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
     });
   }
 
-  // Channel erstellen
   let channel;
   try {
     channel = await guild.channels.create({
@@ -166,83 +180,104 @@ async function createTicketChannel({
       reason: `Whitelist-Ticket für ${applicantTag || applicantDiscordId || 'Unbekannt'}`,
     });
   } catch (e) {
-    console.error(
-      '❌ Erstellen des Channels fehlgeschlagen:',
-      e?.code,
-      e?.message
-    );
+    console.error('❌ Erstellen des Channels fehlgeschlagen:', e?.code, e?.message);
     throw e;
   }
 
-  // Embed bauen
+  // EMBED im StarCity-Stil
   const embed = new EmbedBuilder()
-    .setTitle('📝 Whitelist-Bewerbung')
-    .setDescription('Bitte prüfen und Rückmeldung geben.')
-    .addFields(
-      {
-        name: 'Bewerber',
-        value: applicantDiscordId
-          ? `<@${applicantDiscordId}> (${applicantTag})`
-          : applicantTag,
-        inline: false,
-      },
-      { name: 'Charakter', value: charName || '—', inline: true },
-      ...(fields.steamHex
-        ? [{ name: 'Steam Hex', value: fields.steamHex, inline: true }]
-        : []),
-      ...(fields.alter
-        ? [{ name: 'Alter', value: String(fields.alter), inline: true }]
-        : []),
-      ...(fields.timezone
-        ? [{ name: 'Zeitzone', value: fields.timezone, inline: true }]
-        : []),
-      ...(fields.erfahrung
-        ? [{ name: 'Erfahrung', value: fields.erfahrung, inline: false }]
-        : []),
-      ...(fields.motivation
-        ? [{ name: 'Motivation', value: fields.motivation, inline: false }]
-        : [])
+    .setColor(BRAND.color)
+    .setTitle('📨 Whitelist-Ticket eröffnet')
+    .setDescription(
+      [
+        '**Herzlich Willkommen auf StarCity!**',
+        'Schön, dass du dich für unser Projekt interessierst.',
+        'Hier ist die Zusammenfassung deiner Bewerbung:',
+        '',
+        '*(Unser Team meldet sich zeitnah bei dir. Bitte bleib in diesem Ticket.)*',
+      ].join('\n')
     )
-    .setFooter({ text: `Ticket-ID: ${websiteTicketId || '—'}` })
+    .setFooter({ text: `${caseId} • Kategorie: Whitelist` })
     .setTimestamp();
 
-  // Nachricht senden (Rollen-Ping explizit erlauben)
+  if (BRAND.icon) embed.setAuthor({ name: BRAND.name, iconURL: BRAND.icon });
+  else embed.setAuthor({ name: BRAND.name });
+  if (BRAND.icon) embed.setThumbnail(BRAND.icon);
+  if (BRAND.banner) embed.setImage(BRAND.banner);
+
+  const bewerberText = applicantDiscordId
+    ? `<@${applicantDiscordId}> (${clean(form.discordTag || applicantTag)})`
+    : clean(form.discordTag || applicantTag);
+
+  embed.addFields(
+    { name: 'Bewerber', value: trunc(bewerberText, 256), inline: false },
+    { name: 'Charakter', value: trunc(form.charName, 128) || '—', inline: true },
+    { name: 'Alter', value: form.alter ? String(form.alter) : '—', inline: true },
+    { name: 'Steam Hex', value: trunc(form.steamHex, 64) || '—', inline: true },
+    { name: 'Discord', value: trunc(form.discordTag, 128) || '—', inline: true },
+    { name: 'Zeitzone', value: trunc(form.timezone, 64) || '—', inline: true },
+    { name: 'Wie gefunden', value: trunc(form.howFound, 1024) || '—', inline: false },
+    { name: 'Schreibtisch-Item', value: trunc(form.deskItem, 1024) || '—', inline: false },
+  );
+
+  // Fragen/Antworten
+  const qa = Array.isArray(form.answers) ? form.answers : [];
+  for (let i = 0; i < qa.length && i < 12; i++) { // max. 12 Felder zusätzlich
+    const q = clean(qa[i].question || qa[i].key, `Frage ${i + 1}`);
+    const a = clean(qa[i].answer || qa[i].value, '—');
+    embed.addFields({ name: trunc(`Frage ${i + 1}: ${q}`, 256), value: trunc(a, 1024), inline: false });
+  }
+
   await channel.send({
-    content: `<@&${staffRoleId}> Neues Ticket eingegangen.`,
+    content: `<@&${staffRoleId}> Neues Ticket`,
     embeds: [embed],
     allowedMentions: { roles: [staffRoleId] },
   });
 
-  return channel;
+  return { channel, caseId };
 }
 
-// ---- SLASH COMMAND HANDLER ----
+/* ===========================
+   SLASH HANDLER
+   =========================== */
+
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'ticket-test') {
     const charName = interaction.options.getString('charname', true);
 
-    // Ephemeral (nur für dich sichtbar) – neues Schema mit flags: 64
+    // Ephemeral Antwort (neues Schema via flags: 64)
     try {
-      await interaction.deferReply({ flags: 64 }); // 64 = EPHEMERAL
+      await interaction.deferReply({ flags: 64 });
     } catch {
-      // Fallback: falls defer nicht geht, sofort antworten
       if (!interaction.replied) {
         await interaction.reply({ content: '⏳ Erstelle Ticket…', flags: 64 });
       }
     }
 
     try {
-      const channel = await createTicketChannel({
+      const { channel } = await createTicketChannel({
         guildId: process.env.GUILD_ID,
         categoryId: process.env.TICKETS_CATEGORY_ID,
         staffRoleId: process.env.STAFF_ROLE_ID,
         applicantDiscordId: interaction.user.id,
         applicantTag: `${interaction.user.username}`,
-        charName,
-        fields: {
+        // DEMO-DATEN, damit du das Layout sofort siehst
+        form: {
+          charName,
+          alter: 19,
+          steamHex: '110000112345678',
+          discordTag: `${interaction.user.username}`,
+          howFound: 'Über einen Freund',
+          deskItem: 'Kaffee & Notizbuch',
           timezone: 'Europe/Berlin',
+          websiteTicketId: 'SC-TEST-001',
+          answers: [
+            { question: 'Woran kannst du dich erinnern, wenn dir ein Medic geholfen hat?', answer: 'Nicht an Details der Verletzung.' },
+            { question: 'Darf der FiveM Account geteilt werden?', answer: 'Nein.' },
+            { question: 'Max. Mitglieder in einer Fraktion?', answer: '10' },
+          ],
         },
       });
 
@@ -268,10 +303,16 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// ---- MINI-WEBSERVER FÜR WEBSITE ----
+/* ===========================
+   EXPRESS: RAW JSON + HMAC
+   =========================== */
+
 const app = express();
 
-// Roh-Body + JSON parsen (für HMAC)
+// /health (zum schnellen prüfen)
+app.get('/health', (req, res) => res.send('StarCity Bot alive'));
+
+// Roh-Body + JSON parsen (für korrekte HMAC-Prüfung)
 app.use((req, res, next) => {
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
@@ -301,7 +342,10 @@ function isValidSignature(rawBody, signatureHex, secret) {
   }
 }
 
-// POST /whitelist -> von Website
+/* ===========================
+   POST /whitelist  (von Website)
+   =========================== */
+
 app.post('/whitelist', async (req, res) => {
   try {
     const sig = req.headers['x-signature'];
@@ -315,28 +359,38 @@ app.post('/whitelist', async (req, res) => {
       charName,
       steamHex,
       alter,
-      erfahrung,
-      motivation,
+      erfahrung,        // "Wie gefunden"
+      motivation,       // "Schreibtisch-Item"
       timezone,
       websiteTicketId,
+      answers,          // Array [{question, answer}] ODER [{key, value}]
     } = req.body;
 
     if (!charName)
       return res.status(400).json({ ok: false, error: 'charName required' });
 
-    const channel = await createTicketChannel({
+    const { channel, caseId } = await createTicketChannel({
       guildId: process.env.GUILD_ID,
       categoryId: process.env.TICKETS_CATEGORY_ID,
       staffRoleId: process.env.STAFF_ROLE_ID,
       applicantDiscordId: discordId,
       applicantTag: discordTag,
-      charName,
-      websiteTicketId,
-      fields: { steamHex, alter, erfahrung, motivation, timezone },
+      form: {
+        charName,
+        alter,
+        steamHex,
+        discordTag,
+        howFound: erfahrung,
+        deskItem: motivation,
+        timezone,
+        websiteTicketId,
+        answers: Array.isArray(answers) ? answers : [],
+      },
     });
 
     return res.json({
       ok: true,
+      caseId,
       channelId: channel.id,
       url: `https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`,
     });
@@ -346,6 +400,10 @@ app.post('/whitelist', async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT, () => {
-  console.log(`🌐 Webhook-Server läuft auf Port ${process.env.PORT}`);
+/* ===========================
+   START SERVER
+   =========================== */
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log(`🌐 Webhook-Server läuft auf Port ${process.env.PORT || 3000}`);
 });

@@ -17,7 +17,7 @@ import {
 /* ===========================
    VERSION & BRAND
    =========================== */
-const STARSTYLE_VERSION = 'StarCity style v6.7';
+const STARSTYLE_VERSION = 'StarCity style v6.8';
 
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
@@ -54,47 +54,53 @@ const normalizeAnswers = (raw) => {
     .filter((x) => x.a !== '—');
 };
 
-/* ---------- ACK & RESPONSE ---------- */
+/* ---------- ACK/RESPONSE + TRACE ---------- */
 const toPayload = (x) => (typeof x === 'string' ? { content: x } : (x || { content: 'OK' }));
 
-async function ackNow(interaction) {
+async function ackNow(interaction, trace) {
   try {
     if (!interaction.deferred && !interaction.replied) {
       await interaction.reply({ content: '⏳ …', flags: 64 });
-      console.log('ACK: replied (ephemeral) for', interaction.id);
+      console.log(`${trace} ACK replied`);
       return true;
     }
-  } catch (e) {
-    console.log('ACK: skip (already acked)', interaction.id);
+  } catch {
+    console.log(`${trace} ACK skipped (already)`);
   }
   return false;
 }
-async function editOrFollowUp(interaction, payload) {
+async function editOrFollowUp(interaction, payload, trace) {
   const data = toPayload(payload);
   try {
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(data);
+      console.log(`${trace} editReply OK`);
     } else {
       await interaction.reply({ ...data, flags: 64 });
+      console.log(`${trace} reply OK`);
     }
   } catch (e) {
     if (e?.code === 50027 || e?.status === 401) {
+      console.log(`${trace} reply token expired → channel.send`);
       try { await interaction.channel?.send(data); } catch {}
     } else if (e?.code === 40060) {
+      console.log(`${trace} already ack → followUp`);
       try { await interaction.followUp({ ...data, flags: 64 }); } catch {}
     } else {
-      console.error('RESP ERROR:', e?.code, e?.message || e);
+      console.error(`${trace} RESP ERROR:`, e?.code, e?.message || e);
     }
   }
 }
 
 /* ---------- DEDUPE: Interaction-IDs ---------- */
 const seen = new Map(); // id -> timestamp
-function isDuplicate(interactionId) {
-  if (seen.has(interactionId)) return true;
-  seen.set(interactionId, Date.now());
-  // nach 2 Minuten rauswerfen
-  setTimeout(() => seen.delete(interactionId), 120000).unref?.();
+function isDuplicate(id, trace) {
+  if (seen.has(id)) {
+    console.log(`${trace} DEDUPED`);
+    return true;
+  }
+  seen.set(id, Date.now());
+  setTimeout(() => seen.delete(id), 120000).unref?.();
   return false;
 }
 
@@ -312,19 +318,28 @@ async function createTicketChannel({
    INTERACTIONS (Slash + Buttons)
    =========================== */
 client.on('interactionCreate', async (interaction) => {
-  // DEDUPE: jede Interaction nur 1x verarbeiten
-  if (isDuplicate(interaction.id)) {
-    console.log('DEDUPED:', interaction.id, interaction.customId || interaction.commandName || 'unknown');
-    return;
-  }
+  const traceBase = `TRACE[${interaction.id}]`;
+
+  // DEDUPE
+  if (isDuplicate(interaction.id, traceBase)) return;
 
   // Slash
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName !== 'ticket-test') return;
 
-    await ackNow(interaction);
+    const trace = `${traceBase} SLASH`;
+    console.time(trace);
+    await ackNow(interaction, trace);
+
+    // Watchdog (3s)
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) editOrFollowUp(interaction, '⏳ Ich arbeite daran…', trace).catch(() => {});
+    }, 3000).unref?.();
+
     try {
       const charName = interaction.options.getString('charname', true);
+      console.log(`${trace} STEP createTicket`);
       const { channel } = await createTicketChannel({
         guildId: process.env.GUILD_ID,
         categoryId: process.env.TICKETS_CATEGORY_ID,
@@ -347,10 +362,14 @@ client.on('interactionCreate', async (interaction) => {
           ],
         },
       });
-      await editOrFollowUp(interaction, `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`);
+      await editOrFollowUp(interaction, `✅ Ticket erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}`, trace);
     } catch (e) {
-      console.error('❌ Ticket-Fehler:', e?.code, e?.message || e);
-      await editOrFollowUp(interaction, '❌ Konnte Ticket nicht erstellen (Details in Logs).');
+      console.error(`${trace} ERROR:`, e?.code, e?.message || e);
+      await editOrFollowUp(interaction, '❌ Konnte Ticket nicht erstellen (Details in Logs).', trace);
+    } finally {
+      done = true;
+      clearTimeout(timer);
+      console.timeEnd(trace);
     }
     return;
   }
@@ -358,29 +377,36 @@ client.on('interactionCreate', async (interaction) => {
   // Buttons
   if (!interaction.isButton()) return;
 
-  console.log(
-    `BTN: click ${interaction.customId} by ${interaction.user?.tag || interaction.user?.id} in #${interaction.channel?.id} (replied:${interaction.replied} deferred:${interaction.deferred})`
-  );
+  const trace = `${traceBase} BTN:${interaction.customId}`;
+  console.time(trace);
+  console.log(`${trace} click by ${interaction.user?.tag || interaction.user?.id} in #${interaction.channel?.id} (replied:${interaction.replied} deferred:${interaction.deferred})`);
+
+  await ackNow(interaction, trace);
+
+  // Watchdog (3s)
+  let done = false;
+  const timer = setTimeout(() => {
+    if (!done) editOrFollowUp(interaction, '⏳ Ich arbeite daran…', trace).catch(() => {});
+  }, 3000).unref?.();
 
   try {
     const staffRoleId = process.env.STAFF_ROLE_ID;
-    if (!staffRoleId) { await editOrFollowUp(interaction, '⚠️ STAFF_ROLE_ID nicht gesetzt.'); return; }
-
-    await ackNow(interaction);
+    if (!staffRoleId) { await editOrFollowUp(interaction, '⚠️ STAFF_ROLE_ID nicht gesetzt.', trace); return; }
 
     // Staff-Check
     const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
-    if (!isStaff) { await editOrFollowUp(interaction, '❌ Nur Staff darf diese Aktion nutzen.'); return; }
+    if (!isStaff) { await editOrFollowUp(interaction, '❌ Nur Staff darf diese Aktion nutzen.', trace); return; }
 
     const channel = interaction.channel;
     const meta = readMeta(channel) || {};
     const applicantId = meta.applicantDiscordId || null;
 
     // Bot-Rechte
+    console.log(`${trace} STEP perms`);
     const botPerms = channel.permissionsFor(interaction.guild.members.me);
     if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
-      console.error('BTN: fehlende Rechte ManageChannels in', channel.id);
-      await editOrFollowUp(interaction, '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.');
+      console.error(`${trace} fehlende Rechte ManageChannels`);
+      await editOrFollowUp(interaction, '❌ Mir fehlt **Manage Channels** in diesem Ticket/Kategorie.', trace);
       return;
     }
 
@@ -390,36 +416,42 @@ client.on('interactionCreate', async (interaction) => {
         const msg = await channel.messages.fetch(meta.originalMessageId);
         await msg.edit({ components: [buildButtonsState(state)] });
       } catch (e) {
-        console.error('BTN: Button-Edit-Fehler', e?.code, e?.message || e);
+        console.error(`${trace} Button-Edit-Fehler`, e?.code, e?.message || e);
       }
     };
 
     if (interaction.customId === 'ticket_claim') {
-      if (meta.claimedBy) { await editOrFollowUp(interaction, `ℹ️ Bereits übernommen von <@${meta.claimedBy}>.`); return; }
+      console.log(`${trace} STEP claim`);
+      if (meta.claimedBy) { await editOrFollowUp(interaction, `ℹ️ Bereits übernommen von <@${meta.claimedBy}>.`, trace); return; }
       meta.claimedBy = interaction.user.id;
       meta.claimedAt = Date.now();
       await writeMeta(channel, meta);
       await editButtons({ claimed: true, closed: false });
       await channel.send(`✅ <@${interaction.user.id}> **hat das Ticket übernommen.**`);
-      await editOrFollowUp(interaction, 'Übernahme bestätigt.');
+      await editOrFollowUp(interaction, 'Übernahme bestätigt.', trace);
       return;
     }
 
     if (interaction.customId === 'ticket_close') {
+      console.log(`${trace} STEP close`);
       meta.closedBy = interaction.user.id;
       meta.closedAt = Date.now();
       await writeMeta(channel, meta);
       await lockChannelSend(channel, applicantId);
       await editButtons({ claimed: !!meta.claimedBy, closed: true });
       await channel.send(`🔒 <@${interaction.user.id}> **hat das Ticket geschlossen.**`);
-      await editOrFollowUp(interaction, 'Ticket geschlossen.');
+      await editOrFollowUp(interaction, 'Ticket geschlossen.', trace);
       return;
     }
 
-    await editOrFollowUp(interaction, 'ℹ️ Unbekannte Aktion.');
+    await editOrFollowUp(interaction, 'ℹ️ Unbekannte Aktion.', trace);
   } catch (e) {
-    console.error('BTN: Unhandled error', e?.code, e?.message || e);
-    await editOrFollowUp(interaction, '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).');
+    console.error(`${trace} Unhandled error`, e?.code, e?.message || e);
+    await editOrFollowUp(interaction, '❌ Unerwarteter Fehler bei der Aktion (Details in Logs).', trace);
+  } finally {
+    done = true;
+    clearTimeout(timer);
+    console.timeEnd(trace);
   }
 });
 

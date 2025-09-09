@@ -520,11 +520,20 @@ client.on('interactionCreate', async (interaction) => {
             return;
           }
 
-          // Buttons sofort aktualisieren
+          // ZUERST ephemere Antwort senden
+          console.log(`[${traceId}] Sende ephemere Bestätigung`);
+          await interaction.reply({ content: '✅ Ticket erfolgreich übernommen!', flags: 64 });
+
+          // Dann Buttons aktualisieren
           console.log(`[${traceId}] Aktualisiere Buttons`);
-          await interaction.message.edit({ 
-            components: [buildTicketButtons({ claimed: true, closed: false })] 
-          });
+          try {
+            await interaction.message.edit({ 
+              components: [buildTicketButtons({ claimed: true, closed: false })] 
+            });
+            console.log(`[${traceId}] Buttons erfolgreich aktualisiert`);
+          } catch (buttonError) {
+            console.error(`[${traceId}] Fehler beim Aktualisieren der Buttons:`, buttonError);
+          }
 
           // Meta aktualisieren
           console.log(`[${traceId}] Aktualisiere Meta-Daten`);
@@ -537,27 +546,37 @@ client.on('interactionCreate', async (interaction) => {
             console.log(`[${traceId}] Meta-Daten erfolgreich aktualisiert`);
           } catch (metaError) {
             console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
-            // Meta-Fehler nicht kritisch, weitermachen
           }
 
           // Channel-Nachricht
           console.log(`[${traceId}] Sende Channel-Nachricht`);
-          await channel.send(`✅ **Ticket übernommen**\n<@${interaction.user.id}> hat das Ticket übernommen und wird sich um deine Bewerbung kümmern.`);
-
-          // Ephemere Bestätigung
-          console.log(`[${traceId}] Sende ephemere Bestätigung`);
-          await interaction.reply({ content: '✅ Ticket erfolgreich übernommen!', flags: 64 });
+          try {
+            await channel.send(`✅ **Ticket übernommen**\n<@${interaction.user.id}> hat das Ticket übernommen und wird sich um deine Bewerbung kümmern.`);
+            console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet`);
+          } catch (channelError) {
+            console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht:`, channelError);
+          }
+          
           return;
         }
 
         if (interaction.customId === 'ticket_close') {
           console.log(`[${traceId}] Verarbeite Ticket-Schließung`);
           
-          // Buttons sofort aktualisieren
+          // ZUERST ephemere Antwort senden
+          console.log(`[${traceId}] Sende ephemere Bestätigung`);
+          await interaction.reply({ content: '🔒 Ticket erfolgreich geschlossen!', flags: 64 });
+
+          // Dann Buttons aktualisieren
           console.log(`[${traceId}] Aktualisiere Buttons`);
-          await interaction.message.edit({ 
-            components: [buildTicketButtons({ claimed: !!meta.claimedBy, closed: true })] 
-          });
+          try {
+            await interaction.message.edit({ 
+              components: [buildTicketButtons({ claimed: !!meta.claimedBy, closed: true })] 
+            });
+            console.log(`[${traceId}] Buttons erfolgreich aktualisiert`);
+          } catch (buttonError) {
+            console.error(`[${traceId}] Fehler beim Aktualisieren der Buttons:`, buttonError);
+          }
 
           // Meta aktualisieren
           console.log(`[${traceId}] Aktualisiere Meta-Daten`);
@@ -570,7 +589,6 @@ client.on('interactionCreate', async (interaction) => {
             console.log(`[${traceId}] Meta-Daten erfolgreich aktualisiert`);
           } catch (metaError) {
             console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
-            // Meta-Fehler nicht kritisch, weitermachen
           }
 
           // Channel sperren
@@ -580,16 +598,17 @@ client.on('interactionCreate', async (interaction) => {
             console.log(`[${traceId}] Channel erfolgreich gesperrt`);
           } catch (lockError) {
             console.error(`[${traceId}] Fehler beim Sperren des Channels:`, lockError);
-            // Lock-Fehler nicht kritisch, weitermachen
           }
 
           // Channel-Nachricht
           console.log(`[${traceId}] Sende Channel-Nachricht`);
-          await channel.send(`🔒 **Ticket geschlossen**\n<@${interaction.user.id}> hat das Ticket geschlossen.`);
-
-          // Ephemere Bestätigung
-          console.log(`[${traceId}] Sende ephemere Bestätigung`);
-          await interaction.reply({ content: '🔒 Ticket erfolgreich geschlossen!', flags: 64 });
+          try {
+            await channel.send(`🔒 **Ticket geschlossen**\n<@${interaction.user.id}> hat das Ticket geschlossen.`);
+            console.log(`[${traceId}] Channel-Nachricht erfolgreich gesendet`);
+          } catch (channelError) {
+            console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht:`, channelError);
+          }
+          
           return;
         }
 

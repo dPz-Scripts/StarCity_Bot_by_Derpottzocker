@@ -318,21 +318,38 @@ function readTicketMeta(channel) {
     // Versuche zuerst aus der neuen Storage zu lesen
     const meta = ticketMetaStorage.get(channel.id);
     if (meta.caseId) {
+      console.log(`Meta-Daten aus Storage gelesen für Channel ${channel.id}:`, meta);
       return meta;
     }
     
     // Fallback: Versuche JSON aus dem Topic zu parsen (für alte Tickets)
     const topic = channel.topic || '';
+    console.log(`Channel ${channel.id} Topic:`, topic);
+    
     if (topic.startsWith('{')) {
       const parsedMeta = JSON.parse(topic);
+      console.log(`Meta-Daten aus Topic geparst für Channel ${channel.id}:`, parsedMeta);
       // Speichere in der neuen Storage für zukünftige Verwendung
       ticketMetaStorage.set(channel.id, parsedMeta);
       return parsedMeta;
     }
     
-    // Für neue Tickets ohne Meta-Daten
-    return meta;
-  } catch {
+    // Für neue Tickets ohne Meta-Daten - erstelle eine mit caseId
+    const newMeta = {
+      caseId: makeCaseId(),
+      applicantDiscordId: null,
+      createdAt: Date.now(),
+      claimedBy: null,
+      claimedAt: null,
+      closedBy: null,
+      closedAt: null,
+      status: 'open'
+    };
+    console.log(`Neue Meta-Daten erstellt für Channel ${channel.id}:`, newMeta);
+    ticketMetaStorage.set(channel.id, newMeta);
+    return newMeta;
+  } catch (error) {
+    console.error(`Fehler beim Lesen der Meta-Daten für Channel ${channel.id}:`, error);
     return ticketMetaStorage.get(channel.id);
   }
 }
@@ -341,11 +358,12 @@ async function writeTicketMeta(channel, meta) {
   try {
     console.log(`Schreibe Meta-Daten für Channel ${channel.id}:`, meta);
     
-    // Speichere Meta-Daten in der Storage
+    // Speichere Meta-Daten ZUERST in der Storage
     ticketMetaStorage.set(channel.id, meta);
+    console.log(`Meta-Daten in Storage gespeichert für Channel ${channel.id}`);
     
     // Verwende einen benutzerfreundlichen Topic-Text anstatt JSON
-    const topicText = `🎫 Whitelist-Ticket ${meta.caseId} | Status: ${meta.status} | Bewerber: ${meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt'}`;
+    const topicText = `Whitelist-Ticket ${meta.caseId} | Status: ${meta.status} | Bewerber: ${meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt'}`;
     await channel.setTopic(topicText);
     console.log(`Meta-Daten erfolgreich gespeichert für Channel ${channel.id}`);
   } catch (error) {

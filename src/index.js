@@ -244,26 +244,29 @@ function buildTicketButtons({ claimed = false, closed = false } = {}) {
     row.addComponents(
       new ButtonBuilder()
         .setCustomId('ticket_claim')
-        .setLabel(claimed ? 'Übernommen' : 'Annehmen')
+        .setLabel(claimed ? '✅ Übernommen' : '🎯 Annehmen')
         .setStyle(claimed ? ButtonStyle.Secondary : ButtonStyle.Success)
         .setDisabled(claimed)
+        .setEmoji(claimed ? '✅' : '🎯')
     );
     
     row.addComponents(
       new ButtonBuilder()
         .setCustomId('ticket_rename')
-        .setLabel('Umbenennen')
+        .setLabel('✏️ Umbenennen')
         .setStyle(ButtonStyle.Primary)
         .setDisabled(false)
+        .setEmoji('✏️')
     );
   }
   
   row.addComponents(
     new ButtonBuilder()
       .setCustomId('ticket_close')
-      .setLabel('Schließen')
-      .setStyle(ButtonStyle.Danger)
+      .setLabel(closed ? '🔒 Geschlossen' : '🔒 Schließen')
+      .setStyle(closed ? ButtonStyle.Secondary : ButtonStyle.Danger)
       .setDisabled(closed)
+      .setEmoji('🔒')
   );
   
   return row;
@@ -457,24 +460,36 @@ async function createTicketChannel({
   
   await writeTicketMeta(channel, meta);
 
-  // Verbessertes Embed-Design
+  // Premium Embed-Design mit modernem Look
   const embed = new EmbedBuilder()
-    .setColor(BRAND.color)
-    .setTitle('Whitelist-Ticket erstellt')
+    .setColor(0x00A2FF) // StarCity Blau
+    .setTitle('🎫 Whitelist-Ticket erstellt')
     .setDescription([
-      'Willkommen bei StarCity.',
-      'Ihre Bewerbung ist eingegangen. Unser Team meldet sich zeitnah.',
+      '**Willkommen bei StarCity!** 🌟',
       '',
-      'Bitte halten Sie die Kommunikation in diesem Ticket gebündelt.',
+      'Ihre Bewerbung wurde erfolgreich eingereicht und ist in unserem System registriert.',
+      'Unser Team wird sich zeitnah um Ihr Anliegen kümmern.',
+      '',
+      '💡 **Hinweis:** Bitte halten Sie alle Kommunikation in diesem Ticket gebündelt.',
     ].join('\n'))
-    .setFooter({ text: `${caseId} • Status: Offen` })
-    .setTimestamp();
+    .setFooter({ 
+      text: `${caseId} • Status: Offen • StarCity Bot`, 
+      iconURL: BRAND.icon || undefined 
+    })
+    .setTimestamp()
+    .setThumbnail(BRAND.icon || 'https://cdn.discordapp.com/emojis/1234567890123456789.png');
 
   if (BRAND.icon) {
-    embed.setAuthor({ name: BRAND.name, iconURL: BRAND.icon });
-    embed.setThumbnail(BRAND.icon);
+    embed.setAuthor({ 
+      name: BRAND.name, 
+      iconURL: BRAND.icon,
+      url: 'https://starcity-rp.de'
+    });
   } else {
-    embed.setAuthor({ name: BRAND.name });
+    embed.setAuthor({ 
+      name: BRAND.name,
+      url: 'https://starcity-rp.de'
+    });
   }
   
   if (BRAND.banner) {
@@ -483,31 +498,79 @@ async function createTicketChannel({
 
   const bewerberText = applicantDiscordId ? `<@${applicantDiscordId}> (${clean(form.discordTag || applicantTag)})` : clean(form.discordTag || applicantTag);
 
-  // Verbesserte Feld-Darstellung
+  // Premium Feld-Struktur mit Icons und besserer Organisation
   embed.addFields(
-    { name: 'Bewerber', value: trunc(bewerberText, 256), inline: false },
-    { name: 'Charakter', value: trunc(form.charName, 128) || '—', inline: true },
-    { name: 'Alter', value: form.alter ? String(form.alter) : '—', inline: true },
-    { name: 'Steam Hex', value: trunc(form.steamHex, 64) || '—', inline: true },
-    { name: 'Discord', value: trunc(form.discordTag, 128) || '—', inline: true },
-    { name: 'Zeitzone', value: trunc(form.timezone, 64) || '—', inline: true },
+    { 
+      name: '👤 Bewerber', 
+      value: trunc(bewerberText, 256), 
+      inline: false 
+    },
+    { 
+      name: '🎭 Charakter', 
+      value: trunc(form.charName, 128) || '—', 
+      inline: true 
+    },
+    { 
+      name: '🎂 Alter', 
+      value: form.alter ? `${form.alter} Jahre` : '—', 
+      inline: true 
+    },
+    { 
+      name: '🔗 Steam Hex', 
+      value: trunc(form.steamHex, 64) || '—', 
+      inline: true 
+    },
+    { 
+      name: '💬 Discord', 
+      value: trunc(form.discordTag, 128) || '—', 
+      inline: true 
+    },
+    { 
+      name: '🌍 Zeitzone', 
+      value: trunc(form.timezone, 64) || '—', 
+      inline: true 
+    },
   );
 
   if (form.howFound) {
-    embed.addFields({ name: 'Wie gefunden', value: trunc(form.howFound, 1024), inline: false });
+    embed.addFields({ 
+      name: '🔍 Wie gefunden', 
+      value: trunc(form.howFound, 1024), 
+      inline: false 
+    });
   }
   
   if (form.deskItem) {
-    embed.addFields({ name: 'Hinweis', value: trunc(form.deskItem, 1024), inline: false });
+    embed.addFields({ 
+      name: '📝 Hinweis', 
+      value: trunc(form.deskItem, 1024), 
+      inline: false 
+    });
   }
 
   const qa = normalizeAnswers(form.answers);
-  for (let i = 0; i < qa.length && i < 10; i++) {
+  if (qa.length > 0) {
     embed.addFields({ 
-      name: `Frage ${i + 1}: ${trunc(qa[i].q, 200)}`, 
-      value: trunc(qa[i].a, 1024), 
+      name: '❓ Bewerbungsfragen', 
+      value: 'Die Antworten finden Sie unten:', 
       inline: false 
     });
+    
+    for (let i = 0; i < qa.length && i < 8; i++) {
+      embed.addFields({ 
+        name: `**${i + 1}.** ${trunc(qa[i].q, 150)}`, 
+        value: `> ${trunc(qa[i].a, 800)}`, 
+        inline: false 
+      });
+    }
+    
+    if (qa.length > 8) {
+      embed.addFields({ 
+        name: '📋 Weitere Antworten', 
+        value: `*${qa.length - 8} weitere Antworten wurden eingereicht*`, 
+        inline: false 
+      });
+    }
   }
 
   const sent = await channel.send({
@@ -671,11 +734,26 @@ client.on('interactionCreate', async (interaction) => {
             console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
           }
 
-          // Channel-Nachricht (robust)
+          // Channel-Nachricht (robust) - Premium Design
           console.log(`[${traceId}] Sende Channel-Nachricht`);
           {
-            const msg = `✅ **Ticket übernommen**\n\n<@${interaction.user.id}> hat das Ticket übernommen.\nEs wird sich nun um deine Angelegenheiten gekümmert. Habe jedoch Geduld, wenn dir nicht immer sofort geantwortet wird.`;
-            const result = await safeChannelSend(channel, interaction.guild, msg, traceId);
+            const claimEmbed = new EmbedBuilder()
+              .setColor(0x00FF88) // Grün für Erfolg
+              .setTitle('✅ Ticket übernommen')
+              .setDescription([
+                `<@${interaction.user.id}> hat das Ticket übernommen.`,
+                '',
+                '**Was passiert jetzt?**',
+                '• Unser Team kümmert sich um Ihre Bewerbung',
+                '• Sie erhalten zeitnah eine Rückmeldung',
+                '• Bitte haben Sie Geduld bei der Bearbeitung',
+                '',
+                '💡 *Bei Fragen können Sie sich gerne melden.*'
+              ].join('\n'))
+              .setFooter({ text: `${meta.caseId} • Status: In Bearbeitung` })
+              .setTimestamp();
+              
+            const result = await safeChannelSend(channel, interaction.guild, { embeds: [claimEmbed] }, traceId);
             if (!result.ok) {
               console.warn(`[${traceId}] Konnte keine Channel-Nachricht senden:`, result.reason);
             }
@@ -723,11 +801,28 @@ client.on('interactionCreate', async (interaction) => {
             console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
           }
 
-          // Channel-Nachricht (vor dem Sperren senden)
+          // Channel-Nachricht (vor dem Sperren senden) - Premium Design
           console.log(`[${traceId}] Sende Channel-Nachricht`);
           {
-            const msg = `🔒 **Ticket geschlossen**\n\n<@${interaction.user.id}> hat das Ticket geschlossen.\nVielen Dank für deine Bewerbung bei StarCity!`;
-            const result = await safeChannelSend(channel, interaction.guild, msg, traceId);
+            const closeEmbed = new EmbedBuilder()
+              .setColor(0xFF4444) // Rot für Schließung
+              .setTitle('🔒 Ticket geschlossen')
+              .setDescription([
+                `<@${interaction.user.id}> hat das Ticket geschlossen.`,
+                '',
+                '**Vielen Dank für Ihre Bewerbung bei StarCity!**',
+                '',
+                '**Was passiert als nächstes?**',
+                '• Ihre Bewerbung wird von unserem Team geprüft',
+                '• Sie erhalten eine Benachrichtigung über das Ergebnis',
+                '• Bei Fragen können Sie sich gerne an uns wenden',
+                '',
+                '🌟 *Wir freuen uns auf Sie in StarCity!*'
+              ].join('\n'))
+              .setFooter({ text: `${meta.caseId} • Status: Geschlossen` })
+              .setTimestamp();
+              
+            const result = await safeChannelSend(channel, interaction.guild, { embeds: [closeEmbed] }, traceId);
             if (!result.ok) {
               console.warn(`[${traceId}] Konnte keine Channel-Nachricht senden:`, result.reason);
             }
@@ -748,19 +843,20 @@ client.on('interactionCreate', async (interaction) => {
       if (interaction.customId === 'ticket_rename') {
         console.log(`[${traceId}] Verarbeite Ticket-Umbenennung`);
         
-        // Modal für neue Channel-Namen erstellen
+        // Modal für neue Channel-Namen erstellen - Premium Design
         const modal = new ModalBuilder()
           .setCustomId('ticket_rename_modal')
-          .setTitle('Ticket umbenennen');
+          .setTitle('✏️ Ticket umbenennen');
 
         const nameInput = new TextInputBuilder()
           .setCustomId('new_channel_name')
-          .setLabel('Neuer Channel-Name')
+          .setLabel('🎫 Neuer Channel-Name')
           .setStyle(TextInputStyle.Short)
           .setPlaceholder('z.B. whitelist-max-mustermann-1234')
           .setValue(channel.name)
           .setRequired(true)
-          .setMaxLength(100);
+          .setMaxLength(100)
+          .setMinLength(3);
 
         const actionRow = new ActionRowBuilder().addComponents(nameInput);
         modal.addComponents(actionRow);
@@ -827,11 +923,24 @@ client.on('interactionCreate', async (interaction) => {
           });
           console.log(`[${traceId}] Ephemere Bestätigung gesendet`);
           
-          // Channel-Nachricht
+          // Channel-Nachricht - Premium Design
           console.log(`[${traceId}] Sende Channel-Nachricht...`);
           try {
-            const msg = `✏️ **Channel umbenannt**\n<@${interaction.user.id}> hat den Channel zu **${sanitized}** umbenannt.`;
-            const result = await safeChannelSend(interaction.channel, interaction.guild, msg, traceId);
+            const renameEmbed = new EmbedBuilder()
+              .setColor(0xFFA500) // Orange für Umbenennung
+              .setTitle('✏️ Channel umbenannt')
+              .setDescription([
+                `<@${interaction.user.id}> hat den Channel umbenannt.`,
+                '',
+                `**Neuer Name:** \`${sanitized}\``,
+                `**Alter Name:** \`${oldName}\``,
+                '',
+                '💡 *Der Channel wurde für bessere Organisation umbenannt.*'
+              ].join('\n'))
+              .setFooter({ text: `${meta.caseId} • Channel-Update` })
+              .setTimestamp();
+              
+            const result = await safeChannelSend(interaction.channel, interaction.guild, { embeds: [renameEmbed] }, traceId);
             if (result.ok) {
               console.log(`[${traceId}] Channel-Nachricht für Umbenennung erfolgreich gesendet`);
             } else {

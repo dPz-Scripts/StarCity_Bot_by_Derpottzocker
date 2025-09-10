@@ -641,6 +641,10 @@ client.on('interactionCreate', async (interaction) => {
           try {
             await writeTicketMeta(channel, meta);
             console.log(`[${traceId}] Meta-Daten erfolgreich aktualisiert:`, meta);
+            
+            // Meta-Daten sofort in der Storage aktualisieren
+            ticketMetaStorage.set(channel.id, meta);
+            console.log(`[${traceId}] Meta-Daten auch in Storage aktualisiert`);
           } catch (metaError) {
             console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
           }
@@ -693,6 +697,10 @@ client.on('interactionCreate', async (interaction) => {
           try {
             await writeTicketMeta(channel, meta);
             console.log(`[${traceId}] Meta-Daten erfolgreich aktualisiert`);
+            
+            // Meta-Daten sofort in der Storage aktualisieren
+            ticketMetaStorage.set(channel.id, meta);
+            console.log(`[${traceId}] Meta-Daten auch in Storage aktualisiert`);
           } catch (metaError) {
             console.error(`[${traceId}] Fehler beim Speichern der Meta-Daten:`, metaError);
           }

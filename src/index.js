@@ -245,7 +245,6 @@ function buildTicketButtons({ claimed = false, closed = false } = {}) {
       new ButtonBuilder()
         .setCustomId('ticket_claim')
         .setLabel(claimed ? 'Übernommen' : 'Annehmen')
-        .setEmoji(claimed ? '✅' : '👋')
         .setStyle(claimed ? ButtonStyle.Secondary : ButtonStyle.Success)
         .setDisabled(claimed)
     );
@@ -254,9 +253,8 @@ function buildTicketButtons({ claimed = false, closed = false } = {}) {
       new ButtonBuilder()
         .setCustomId('ticket_rename')
         .setLabel('Umbenennen')
-        .setEmoji('✏️')
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(closed)
+        .setDisabled(false)
     );
   }
   
@@ -264,7 +262,6 @@ function buildTicketButtons({ claimed = false, closed = false } = {}) {
     new ButtonBuilder()
       .setCustomId('ticket_close')
       .setLabel('Schließen')
-      .setEmoji('🔒')
       .setStyle(ButtonStyle.Danger)
       .setDisabled(closed)
   );
@@ -436,13 +433,12 @@ async function createTicketChannel({
   // Verbessertes Embed-Design
   const embed = new EmbedBuilder()
     .setColor(BRAND.color)
-    .setTitle('🎫 Whitelist-Ticket eröffnet')
+    .setTitle('Whitelist-Ticket erstellt')
     .setDescription([
-      '**Willkommen bei StarCity!**',
+      'Willkommen bei StarCity.',
+      'Ihre Bewerbung ist eingegangen. Unser Team meldet sich zeitnah.',
       '',
-      'Deine Bewerbung wurde erfolgreich eingereicht. Unser Team wird sich zeitnah bei dir melden.',
-      '',
-      '**Bitte bleib in diesem Ticket und warte auf eine Antwort.**',
+      'Bitte halten Sie die Kommunikation in diesem Ticket gebündelt.',
     ].join('\n'))
     .setFooter({ text: `${caseId} • Status: Offen` })
     .setTimestamp();
@@ -462,33 +458,33 @@ async function createTicketChannel({
 
   // Verbesserte Feld-Darstellung
   embed.addFields(
-    { name: '👤 Bewerber', value: trunc(bewerberText, 256), inline: false },
-    { name: '🎭 Charakter', value: trunc(form.charName, 128) || '—', inline: true },
-    { name: '🎂 Alter', value: form.alter ? String(form.alter) : '—', inline: true },
-    { name: '🆔 Steam Hex', value: trunc(form.steamHex, 64) || '—', inline: true },
-    { name: '💬 Discord', value: trunc(form.discordTag, 128) || '—', inline: true },
-    { name: '🌍 Zeitzone', value: trunc(form.timezone, 64) || '—', inline: true },
+    { name: 'Bewerber', value: trunc(bewerberText, 256), inline: false },
+    { name: 'Charakter', value: trunc(form.charName, 128) || '—', inline: true },
+    { name: 'Alter', value: form.alter ? String(form.alter) : '—', inline: true },
+    { name: 'Steam Hex', value: trunc(form.steamHex, 64) || '—', inline: true },
+    { name: 'Discord', value: trunc(form.discordTag, 128) || '—', inline: true },
+    { name: 'Zeitzone', value: trunc(form.timezone, 64) || '—', inline: true },
   );
 
   if (form.howFound) {
-    embed.addFields({ name: '🔍 Wie gefunden', value: trunc(form.howFound, 1024), inline: false });
+    embed.addFields({ name: 'Wie gefunden', value: trunc(form.howFound, 1024), inline: false });
   }
   
   if (form.deskItem) {
-    embed.addFields({ name: '🖥️ Schreibtisch-Item', value: trunc(form.deskItem, 1024), inline: false });
+    embed.addFields({ name: 'Hinweis', value: trunc(form.deskItem, 1024), inline: false });
   }
 
   const qa = normalizeAnswers(form.answers);
   for (let i = 0; i < qa.length && i < 10; i++) {
     embed.addFields({ 
-      name: `❓ Frage ${i + 1}: ${trunc(qa[i].q, 200)}`, 
+      name: `Frage ${i + 1}: ${trunc(qa[i].q, 200)}`, 
       value: trunc(qa[i].a, 1024), 
       inline: false 
     });
   }
 
   const sent = await channel.send({
-    content: `<@&${process.env.STAFF_ROLE_ID}> 🎫 Neues Whitelist-Ticket`,
+    content: `<@&${process.env.STAFF_ROLE_ID}> Neues Whitelist-Ticket`,
     embeds: [embed],
     components: [buildTicketButtons()],
     allowedMentions: { roles: [process.env.STAFF_ROLE_ID] },
@@ -944,6 +940,19 @@ const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {
   console.log(`🌐 Webhook-Server läuft auf Port ${PORT}`);
 });
+
+// Keepalive: alle 4 Minuten /health pingen, damit Koyeb nicht einschläft
+try {
+  const SELF_URL = process.env.SELF_URL; // z.B. https://<app-name>-<id>.koyeb.app
+  if (SELF_URL) {
+    setInterval(() => {
+      fetch(`${SELF_URL}/health`).catch(() => {});
+    }, 240000);
+    console.log('🔁 Keepalive aktiviert');
+  } else {
+    console.log('ℹ️ Kein SELF_URL gesetzt. Keepalive deaktiviert.');
+  }
+} catch {}
 
 // Graceful shutdown
 process.on('SIGINT', () => {

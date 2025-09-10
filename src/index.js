@@ -1429,6 +1429,8 @@ app.post('/whitelist', async (req, res) => {
   const traceId = `webhook-${Date.now()}`;
   console.log(`[${traceId}] Webhook-Anfrage erhalten`);
   
+  let key = null; // Variable außerhalb des try-catch definieren
+  
   try {
     const sig = req.headers['x-signature'];
     if (!isValidSignature(req.rawBody, sig, process.env.WEBHOOK_SECRET)) {
@@ -1447,7 +1449,7 @@ app.post('/whitelist', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'charName required' });
     }
 
-    const key = idempotency.createKey('webhook', websiteTicketId || discordId, discordId, charName);
+    key = idempotency.createKey('webhook', websiteTicketId || discordId, discordId, charName);
     
     // Idempotenz prüfen
     const check = idempotency.isAllowed(key);
@@ -1488,7 +1490,9 @@ app.post('/whitelist', async (req, res) => {
     console.error(`[${traceId}] Webhook-Fehler:`, error);
     return res.status(500).json({ ok: false, error: 'server error' });
   } finally {
-    idempotency.markComplete(key);
+    if (key) {
+      idempotency.markComplete(key);
+    }
   }
 });
 

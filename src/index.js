@@ -1014,32 +1014,34 @@ client.on('interactionCreate', async (interaction) => {
             console.error(`[${traceId}] Reply-Fehler bei Bestätigung:`, replyError);
           }
           
-          // Channel-Nachricht - Premium Design
+          // Channel-Nachricht - Premium Design (asynchron im Hintergrund)
           console.log(`[${traceId}] Sende Channel-Nachricht...`);
-          try {
-            const renameEmbed = new EmbedBuilder()
-              .setColor(0xFFA500) // Orange für Umbenennung
-              .setTitle('✏️ Channel umbenannt')
-              .setDescription([
-                `<@${interaction.user.id}> hat den Channel umbenannt.`,
-                '',
-                `**Neuer Name:** \`${sanitized}\``,
-                `**Alter Name:** \`${oldName}\``,
-                '',
-                '💡 *Der Channel wurde für bessere Organisation umbenannt.*'
-              ].join('\n'))
-              .setFooter({ text: `${meta.caseId} • Channel-Update` })
-              .setTimestamp();
-              
-            const result = await safeChannelSend(interaction.channel, interaction.guild, { embeds: [renameEmbed] }, traceId);
-            if (result.ok) {
-              console.log(`[${traceId}] Channel-Nachricht für Umbenennung erfolgreich gesendet`);
-            } else {
-              console.warn(`[${traceId}] Konnte keine Channel-Nachricht senden:`, result.reason);
+          setImmediate(async () => {
+            try {
+              const renameEmbed = new EmbedBuilder()
+                .setColor(0xFFA500) // Orange für Umbenennung
+                .setTitle('✏️ Channel umbenannt')
+                .setDescription([
+                  `<@${interaction.user.id}> hat den Channel umbenannt.`,
+                  '',
+                  `**Neuer Name:** \`${sanitized}\``,
+                  `**Alter Name:** \`${oldName}\``,
+                  '',
+                  '💡 *Der Channel wurde für bessere Organisation umbenannt.*'
+                ].join('\n'))
+                .setFooter({ text: `${meta.caseId} • Channel-Update` })
+                .setTimestamp();
+                
+              const result = await safeChannelSend(interaction.channel, interaction.guild, { embeds: [renameEmbed] }, traceId);
+              if (result.ok) {
+                console.log(`[${traceId}] Channel-Nachricht für Umbenennung erfolgreich gesendet`);
+              } else {
+                console.warn(`[${traceId}] Konnte keine Channel-Nachricht senden:`, result.reason);
+              }
+            } catch (channelError) {
+              console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht für Umbenennung:`, channelError);
             }
-          } catch (channelError) {
-            console.error(`[${traceId}] Fehler beim Senden der Channel-Nachricht für Umbenennung:`, channelError);
-          }
+          });
           
           console.log(`[${traceId}] Modal-Verarbeitung erfolgreich abgeschlossen`);
           

@@ -947,30 +947,16 @@ client.on('interactionCreate', async (interaction) => {
           const oldName = interaction.channel.name;
           console.log(`[${traceId}] Alter Channel-Name: ${oldName}`);
 
-          // Channel umbenennen (synchron für sofortige Umbenennung)
+          // Channel umbenennen (asynchron im Hintergrund - NICHT blockierend)
           console.log(`[${traceId}] Starte Channel-Umbenennung...`);
-          try {
-            await interaction.channel.setName(sanitized);
-            console.log(`[${traceId}] Channel erfolgreich umbenannt zu: ${sanitized}`);
-          } catch (renameError) {
-            console.warn(`[${traceId}] Channel-Umbenennung fehlgeschlagen:`, renameError);
-            // Fehler an User weitergeben
+          setImmediate(async () => {
             try {
-              if (interaction.deferred) {
-                await interaction.editReply({ 
-                  content: `❌ Fehler beim Umbenennen: ${renameError.message}` 
-                });
-              } else {
-                await interaction.reply({ 
-                  content: `❌ Fehler beim Umbenennen: ${renameError.message}`, 
-                  flags: 64 
-                });
-              }
-            } catch (replyError) {
-              console.error(`[${traceId}] Reply-Fehler bei Umbenennung:`, replyError);
+              await interaction.channel.setName(sanitized);
+              console.log(`[${traceId}] Channel erfolgreich umbenannt zu: ${sanitized}`);
+            } catch (renameError) {
+              console.warn(`[${traceId}] Channel-Umbenennung fehlgeschlagen:`, renameError);
             }
-            return;
-          }
+          });
           
           // Meta aktualisieren (ohne auf Channel-Umbenennung zu warten)
           console.log(`[${traceId}] Aktualisiere Meta-Daten...`);

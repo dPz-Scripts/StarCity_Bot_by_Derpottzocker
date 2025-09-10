@@ -362,9 +362,18 @@ async function writeTicketMeta(channel, meta) {
     ticketMetaStorage.set(channel.id, meta);
     console.log(`Meta-Daten in Storage gespeichert für Channel ${channel.id}`);
     
-    // Verwende einen benutzerfreundlichen Topic-Text anstatt JSON
-    const topicText = `Whitelist-Ticket ${meta.caseId} | Status: ${meta.status} | Bewerber: ${meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt'}`;
-    await channel.setTopic(topicText);
+    // Topic-Update asynchron im Hintergrund (nicht blockierend)
+    setImmediate(async () => {
+      try {
+        const topicText = `Whitelist-Ticket ${meta.caseId} | Status: ${meta.status} | Bewerber: ${meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt'}`;
+        await channel.setTopic(topicText);
+        console.log(`Topic erfolgreich aktualisiert für Channel ${channel.id}`);
+      } catch (topicError) {
+        console.warn(`Topic-Update fehlgeschlagen für Channel ${channel.id}:`, topicError);
+        // Topic-Fehler sind nicht kritisch, ignorieren
+      }
+    });
+    
     console.log(`Meta-Daten erfolgreich gespeichert für Channel ${channel.id}`);
   } catch (error) {
     console.error(`Fehler beim Speichern der Meta-Daten für Channel ${channel.id}:`, error);

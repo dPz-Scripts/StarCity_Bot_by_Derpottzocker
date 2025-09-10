@@ -874,7 +874,7 @@ client.on('interactionCreate', async (interaction) => {
       if (interaction.customId === 'ticket_rename') {
         console.log(`[${traceId}] Verarbeite Ticket-Umbenennung`);
         
-        // Modal für neue Channel-Namen erstellen - Premium Design
+        // SOFORT Modal erstellen und anzeigen (keine Verzögerung)
         const modal = new ModalBuilder()
           .setCustomId('ticket_rename_modal')
           .setTitle('✏️ Ticket umbenennen');
@@ -884,7 +884,7 @@ client.on('interactionCreate', async (interaction) => {
           .setLabel('🎫 Neuer Channel-Name')
           .setStyle(TextInputStyle.Short)
           .setPlaceholder('z.B. whitelist-max-mustermann-1234')
-          .setValue(channel.name)
+          .setValue(interaction.channel.name)
           .setRequired(true)
           .setMaxLength(100)
           .setMinLength(3);
@@ -892,8 +892,16 @@ client.on('interactionCreate', async (interaction) => {
         const actionRow = new ActionRowBuilder().addComponents(nameInput);
         modal.addComponents(actionRow);
 
-        // Modal anzeigen (ohne deferReply für Modals)
-        await interaction.showModal(modal);
+        // Modal SOFORT anzeigen (keine Checks davor)
+        try {
+          await interaction.showModal(modal);
+          console.log(`[${traceId}] Modal erfolgreich angezeigt`);
+        } catch (modalError) {
+          console.error(`[${traceId}] Modal-Fehler:`, modalError);
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: '❌ Fehler beim Öffnen des Modals.', flags: 64 });
+          }
+        }
         return;
       }
 
@@ -909,7 +917,18 @@ client.on('interactionCreate', async (interaction) => {
         console.log(`[${traceId}] Starte Modal-Verarbeitung`);
         
         // SOFORT antworten um Timeout zu vermeiden
-        await interaction.deferReply({ flags: 64 });
+        try {
+          await interaction.deferReply({ flags: 64 });
+        } catch (deferError) {
+          console.error(`[${traceId}] Defer-Fehler:`, deferError);
+          // Wenn defer fehlschlägt, versuche reply
+          try {
+            await interaction.reply({ content: '⏳ Verarbeite Umbenennung...', flags: 64 });
+          } catch (replyError) {
+            console.error(`[${traceId}] Reply-Fehler:`, replyError);
+            return; // Interaction ist abgelaufen
+          }
+        }
         
         try {
           const rawName = interaction.fields.getTextInputValue('new_channel_name');
@@ -935,9 +954,20 @@ client.on('interactionCreate', async (interaction) => {
           } catch (renameError) {
             console.warn(`[${traceId}] Channel-Umbenennung fehlgeschlagen:`, renameError);
             // Fehler an User weitergeben
-            await interaction.editReply({ 
-              content: `❌ Fehler beim Umbenennen: ${renameError.message}` 
-            });
+            try {
+              if (interaction.deferred) {
+                await interaction.editReply({ 
+                  content: `❌ Fehler beim Umbenennen: ${renameError.message}` 
+                });
+              } else {
+                await interaction.reply({ 
+                  content: `❌ Fehler beim Umbenennen: ${renameError.message}`, 
+                  flags: 64 
+                });
+              }
+            } catch (replyError) {
+              console.error(`[${traceId}] Reply-Fehler bei Umbenennung:`, replyError);
+            }
             return;
           }
           
@@ -952,10 +982,21 @@ client.on('interactionCreate', async (interaction) => {
           
           // Ephemere Bestätigung
           console.log(`[${traceId}] Sende ephemere Bestätigung...`);
-          await interaction.editReply({ 
-            content: `✅ Channel erfolgreich umbenannt zu: **${sanitized}**` 
-          });
-          console.log(`[${traceId}] Ephemere Bestätigung gesendet`);
+          try {
+            if (interaction.deferred) {
+              await interaction.editReply({ 
+                content: `✅ Channel erfolgreich umbenannt zu: **${sanitized}**` 
+              });
+            } else {
+              await interaction.reply({ 
+                content: `✅ Channel erfolgreich umbenannt zu: **${sanitized}**`, 
+                flags: 64 
+              });
+            }
+            console.log(`[${traceId}] Ephemere Bestätigung gesendet`);
+          } catch (replyError) {
+            console.error(`[${traceId}] Reply-Fehler bei Bestätigung:`, replyError);
+          }
           
           // Channel-Nachricht - Premium Design
           console.log(`[${traceId}] Sende Channel-Nachricht...`);

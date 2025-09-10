@@ -396,8 +396,9 @@ async function writeTicketMeta(channel, meta) {
     ticketMetaStorage.set(channel.id, meta);
     console.log(`Meta-Daten in Storage gespeichert für Channel ${channel.id}`);
     
-    // Topic-Update asynchron im Hintergrund (nicht blockierend)
-    setImmediate(async () => {
+    // Topic-Update komplett asynchron im Hintergrund (nicht blockierend)
+    // Verwende setTimeout statt setImmediate für bessere Performance
+    setTimeout(async () => {
       try {
         const topicText = `Whitelist-Ticket ${meta.caseId} | Status: ${meta.status} | Bewerber: ${meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt'}`;
         await channel.setTopic(topicText);
@@ -406,7 +407,7 @@ async function writeTicketMeta(channel, meta) {
         console.warn(`Topic-Update fehlgeschlagen für Channel ${channel.id}:`, topicError);
         // Topic-Fehler sind nicht kritisch, ignorieren
       }
-    });
+    }, 0); // Sofort ausführen, aber asynchron
     
     console.log(`Meta-Daten erfolgreich gespeichert für Channel ${channel.id}`);
   } catch (error) {
@@ -977,7 +978,21 @@ client.on('interactionCreate', async (interaction) => {
           meta.renamedBy = interaction.user.id;
           meta.renamedAt = Date.now();
           meta.originalName = oldName;
-          await writeTicketMeta(interaction.channel, meta);
+          
+          // Meta-Daten SOFORT in Storage speichern (nicht blockierend)
+          ticketMetaStorage.set(interaction.channel.id, meta);
+          console.log(`[${traceId}] Meta-Daten in Storage gespeichert`);
+          
+          // writeTicketMeta asynchron im Hintergrund (nicht blockierend)
+          setImmediate(async () => {
+            try {
+              await writeTicketMeta(interaction.channel, meta);
+              console.log(`[${traceId}] Meta-Daten asynchron aktualisiert`);
+            } catch (metaError) {
+              console.warn(`[${traceId}] Meta-Daten-Update fehlgeschlagen:`, metaError);
+            }
+          });
+          
           console.log(`[${traceId}] Meta-Daten aktualisiert`);
           
           // Ephemere Bestätigung

@@ -244,7 +244,7 @@ function buildTicketButtons({ claimed = false, closed = false } = {}) {
     row.addComponents(
       new ButtonBuilder()
         .setCustomId('ticket_claim')
-        .setLabel(claimed ? '✅ Übernommen' : '🎯 Annehmen')
+        .setLabel(claimed ? 'Übernommen' : 'Annehmen')
         .setStyle(claimed ? ButtonStyle.Secondary : ButtonStyle.Success)
         .setDisabled(claimed)
         .setEmoji(claimed ? '✅' : '🎯')
@@ -253,7 +253,7 @@ function buildTicketButtons({ claimed = false, closed = false } = {}) {
     row.addComponents(
       new ButtonBuilder()
         .setCustomId('ticket_rename')
-        .setLabel('✏️ Umbenennen')
+        .setLabel('Umbenennen')
         .setStyle(ButtonStyle.Primary)
         .setDisabled(false)
         .setEmoji('✏️')
@@ -263,7 +263,7 @@ function buildTicketButtons({ claimed = false, closed = false } = {}) {
   row.addComponents(
     new ButtonBuilder()
       .setCustomId('ticket_close')
-      .setLabel(closed ? '🔒 Geschlossen' : '🔒 Schließen')
+      .setLabel(closed ? 'Geschlossen' : 'Schließen')
       .setStyle(closed ? ButtonStyle.Secondary : ButtonStyle.Danger)
       .setDisabled(closed)
       .setEmoji('🔒')
@@ -302,17 +302,48 @@ async function safeChannelSend(channel, guild, content, traceId = 'n/a') {
 async function lockChannel(channel, applicantId) {
   try {
     console.log(`Sperre Channel ${channel.id} für ${applicantId || 'alle'}`);
-    await channel.permissionOverwrites.edit(channel.guild.roles.everyone, { SendMessages: false });
+    
+    // Prüfe Bot-Berechtigungen vor dem Sperren
+    const botMember = channel.guild.members.me;
+    const botPerms = channel.permissionsFor(botMember);
+    
+    if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
+      console.warn(`Bot hat keine ManageChannels-Berechtigung für Channel ${channel.id}`);
+      return; // Nicht kritisch, einfach überspringen
+    }
+    
+    // Versuche @everyone zu sperren (nicht kritisch wenn fehlschlägt)
+    try {
+      await channel.permissionOverwrites.edit(channel.guild.roles.everyone, { SendMessages: false });
+      console.log(`@everyone für Channel ${channel.id} gesperrt`);
+    } catch (everyoneError) {
+      console.warn(`Konnte @everyone nicht sperren für Channel ${channel.id}:`, everyoneError.message);
+    }
+    
+    // Versuche Bewerber zu sperren (nicht kritisch wenn fehlschlägt)
     if (applicantId) {
-      await channel.permissionOverwrites.edit(applicantId, { SendMessages: false });
+      try {
+        await channel.permissionOverwrites.edit(applicantId, { SendMessages: false });
+        console.log(`Bewerber ${applicantId} für Channel ${channel.id} gesperrt`);
+      } catch (applicantError) {
+        console.warn(`Konnte Bewerber ${applicantId} nicht sperren für Channel ${channel.id}:`, applicantError.message);
+      }
     }
+    
+    // Versuche Channel umzubenennen (nicht kritisch wenn fehlschlägt)
     if (!channel.name.startsWith('closed-')) {
-      await channel.setName(`closed-${channel.name}`);
+      try {
+        await channel.setName(`closed-${channel.name}`);
+        console.log(`Channel ${channel.id} umbenannt zu closed-${channel.name}`);
+      } catch (renameError) {
+        console.warn(`Konnte Channel ${channel.id} nicht umbenennen:`, renameError.message);
+      }
     }
-    console.log(`Channel ${channel.id} erfolgreich gesperrt`);
+    
+    console.log(`Channel ${channel.id} Sperrung abgeschlossen`);
   } catch (error) {
-    console.error(`Fehler beim Sperren des Channels ${channel.id}:`, error);
-    throw error; // Fehler weiterwerfen für bessere Behandlung
+    console.error(`Unerwarteter Fehler beim Sperren des Channels ${channel.id}:`, error);
+    // Nicht weiterwerfen - Sperrung ist nicht kritisch
   }
 }
 
@@ -896,16 +927,19 @@ client.on('interactionCreate', async (interaction) => {
           const oldName = interaction.channel.name;
           console.log(`[${traceId}] Alter Channel-Name: ${oldName}`);
 
-          // Channel umbenennen (asynchron im Hintergrund)
+          // Channel umbenennen (synchron für sofortige Umbenennung)
           console.log(`[${traceId}] Starte Channel-Umbenennung...`);
-          setImmediate(async () => {
-            try {
-              await interaction.channel.setName(sanitized);
-              console.log(`[${traceId}] Channel erfolgreich umbenannt zu: ${sanitized}`);
-            } catch (renameError) {
-              console.warn(`[${traceId}] Channel-Umbenennung fehlgeschlagen:`, renameError);
-            }
-          });
+          try {
+            await interaction.channel.setName(sanitized);
+            console.log(`[${traceId}] Channel erfolgreich umbenannt zu: ${sanitized}`);
+          } catch (renameError) {
+            console.warn(`[${traceId}] Channel-Umbenennung fehlgeschlagen:`, renameError);
+            // Fehler an User weitergeben
+            await interaction.editReply({ 
+              content: `❌ Fehler beim Umbenennen: ${renameError.message}` 
+            });
+            return;
+          }
           
           // Meta aktualisieren (ohne auf Channel-Umbenennung zu warten)
           console.log(`[${traceId}] Aktualisiere Meta-Daten...`);

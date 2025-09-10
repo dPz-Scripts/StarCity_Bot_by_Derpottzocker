@@ -523,6 +523,19 @@ client.on('interactionCreate', async (interaction) => {
   
   console.log(`[${traceId}] ${interaction.type} by ${interaction.user?.tag || interaction.user?.id}`);
 
+  // SOFORT antworten für alle Interaktionen um Timeout zu vermeiden
+  let deferred = false;
+  try {
+    if (interaction.isChatInputCommand() || interaction.isButton()) {
+      await interaction.deferReply({ flags: 64 });
+      deferred = true;
+      console.log(`[${traceId}] DeferReply erfolgreich`);
+    }
+  } catch (deferError) {
+    console.error(`[${traceId}] DeferReply-Fehler:`, deferError);
+    // Versuche trotzdem zu antworten
+  }
+
   try {
     // SLASH COMMANDS
     if (interaction.isChatInputCommand()) {
@@ -538,12 +551,13 @@ client.on('interactionCreate', async (interaction) => {
           ? '⏳ Ticket wird bereits erstellt...' 
           : `⏳ Zu viele Tickets in kurzer Zeit. Bitte warte ${check.age || 60} Sekunden.`;
         
-        await interaction.reply({ content: message, flags: 64 });
+        if (deferred) {
+          await interaction.editReply({ content: message });
+        } else {
+          await interaction.reply({ content: message, flags: 64 });
+        }
         return;
       }
-
-      // SOFORT antworten um Timeout zu vermeiden
-      await interaction.deferReply({ flags: 64 });
 
       try {
         const { channel } = await createTicketChannel({
@@ -587,51 +601,71 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       console.log(`[${traceId}] Button-Klick: ${interaction.customId}`);
       
-      try {
-        const staffRoleId = process.env.STAFF_ROLE_ID;
-        if (!staffRoleId) {
-          console.log(`[${traceId}] STAFF_ROLE_ID nicht konfiguriert`);
+      const staffRoleId = process.env.STAFF_ROLE_ID;
+      if (!staffRoleId) {
+        console.log(`[${traceId}] STAFF_ROLE_ID nicht konfiguriert`);
+        if (deferred) {
+          await interaction.editReply({ content: '⚠️ STAFF_ROLE_ID nicht konfiguriert.' });
+        } else {
           await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht konfiguriert.', flags: 64 });
-          return;
         }
+        return;
+      }
 
-        const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
-        console.log(`[${traceId}] Staff-Check: ${isStaff} (Role: ${staffRoleId})`);
-        if (!isStaff) {
+      const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
+      console.log(`[${traceId}] Staff-Check: ${isStaff} (Role: ${staffRoleId})`);
+      if (!isStaff) {
+        if (deferred) {
+          await interaction.editReply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.' });
+        } else {
           await interaction.reply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.', flags: 64 });
-          return;
         }
+        return;
+      }
 
-        const channel = interaction.channel;
-        const meta = readTicketMeta(channel);
-        console.log(`[${traceId}] Meta-Daten:`, meta);
-        
-        if (!meta.caseId) {
-          console.log(`[${traceId}] Kein gültiges Ticket (kein caseId)`);
+      const channel = interaction.channel;
+      const meta = readTicketMeta(channel);
+      console.log(`[${traceId}] Meta-Daten:`, meta);
+      
+      if (!meta.caseId) {
+        console.log(`[${traceId}] Kein gültiges Ticket (kein caseId)`);
+        if (deferred) {
+          await interaction.editReply({ content: '❌ Dies ist kein gültiges Ticket.' });
+        } else {
           await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
-          return;
         }
+        return;
+      }
 
-        // Berechtigungen prüfen
-        const botPerms = channel.permissionsFor(interaction.guild.members.me);
-        if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
-          console.log(`[${traceId}] Fehlende ManageChannels-Berechtigung`);
+      // Berechtigungen prüfen
+      const botPerms = channel.permissionsFor(interaction.guild.members.me);
+      if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
+        console.log(`[${traceId}] Fehlende ManageChannels-Berechtigung`);
+        if (deferred) {
+          await interaction.editReply({ content: '❌ Mir fehlen die nötigen Berechtigungen.' });
+        } else {
           await interaction.reply({ content: '❌ Mir fehlen die nötigen Berechtigungen.', flags: 64 });
+        }
+        return;
+      }
+
+      if (interaction.customId === 'ticket_claim') {
+        console.log(`[${traceId}] Verarbeite Ticket-Übernahme`);
+        if (meta.claimedBy) {
+          if (deferred) {
+            await interaction.editReply({ content: '⚠️ Dieses Ticket wurde bereits übernommen.' });
+          } else {
+            await interaction.reply({ content: '⚠️ Dieses Ticket wurde bereits übernommen.', flags: 64 });
+          }
           return;
         }
 
-        if (interaction.customId === 'ticket_claim') {
-          console.log(`[${traceId}] Verarbeite Ticket-Übernahme`);
-          if (meta.claimedBy) {
-            await interaction.reply({ content: '⚠️ Dieses Ticket wurde bereits übernommen.', flags: 64 });
-            return;
-          }
-
-          // SOFORT antworten um Timeout zu vermeiden
-          await interaction.deferReply({ flags: 64 });
-
-          // Ephemere Bestätigung
+        // Ephemere Bestätigung
+        if (deferred) {
           await interaction.editReply({ content: '✅ Ticket erfolgreich übernommen!' });
+        } else {
+          await interaction.reply({ content: '✅ Ticket erfolgreich übernommen!', flags: 64 });
+        }
 
           // Buttons aktualisieren
           console.log(`[${traceId}] Aktualisiere Buttons`);
@@ -676,14 +710,15 @@ client.on('interactionCreate', async (interaction) => {
           return;
         }
 
-        if (interaction.customId === 'ticket_close') {
-          console.log(`[${traceId}] Verarbeite Ticket-Schließung`);
-          
-          // SOFORT antworten um Timeout zu vermeiden
-          await interaction.deferReply({ flags: 64 });
-
-          // Ephemere Bestätigung
+      if (interaction.customId === 'ticket_close') {
+        console.log(`[${traceId}] Verarbeite Ticket-Schließung`);
+        
+        // Ephemere Bestätigung
+        if (deferred) {
           await interaction.editReply({ content: '🔒 Ticket erfolgreich geschlossen!' });
+        } else {
+          await interaction.reply({ content: '🔒 Ticket erfolgreich geschlossen!', flags: 64 });
+        }
 
           // Buttons aktualisieren
           console.log(`[${traceId}] Aktualisiere Buttons`);
@@ -737,41 +772,36 @@ client.on('interactionCreate', async (interaction) => {
           return;
         }
 
-        if (interaction.customId === 'ticket_rename') {
-          console.log(`[${traceId}] Verarbeite Ticket-Umbenennung`);
-          
-          // Modal für neue Channel-Namen erstellen
-          const modal = new ModalBuilder()
-            .setCustomId('ticket_rename_modal')
-            .setTitle('Ticket umbenennen');
-
-          const nameInput = new TextInputBuilder()
-            .setCustomId('new_channel_name')
-            .setLabel('Neuer Channel-Name')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('z.B. whitelist-max-mustermann-1234')
-            .setValue(channel.name)
-            .setRequired(true)
-            .setMaxLength(100);
-
-          const actionRow = new ActionRowBuilder().addComponents(nameInput);
-          modal.addComponents(actionRow);
-
-          // Modal anzeigen (ohne deferReply für Modals)
-          await interaction.showModal(modal);
-          return;
-        }
-
-        console.log(`[${traceId}] Unbekannter Button: ${interaction.customId}`);
-        await interaction.reply({ content: '❌ Unbekannte Aktion.', flags: 64 });
+      if (interaction.customId === 'ticket_rename') {
+        console.log(`[${traceId}] Verarbeite Ticket-Umbenennung`);
         
-      } catch (buttonError) {
-        console.error(`[${traceId}] Button-Fehler:`, buttonError);
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({ content: '❌ Fehler bei der Button-Aktion.', flags: 64 });
-        } else {
-          await interaction.editReply({ content: '❌ Fehler bei der Button-Aktion.' });
-        }
+        // Modal für neue Channel-Namen erstellen
+        const modal = new ModalBuilder()
+          .setCustomId('ticket_rename_modal')
+          .setTitle('Ticket umbenennen');
+
+        const nameInput = new TextInputBuilder()
+          .setCustomId('new_channel_name')
+          .setLabel('Neuer Channel-Name')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('z.B. whitelist-max-mustermann-1234')
+          .setValue(channel.name)
+          .setRequired(true)
+          .setMaxLength(100);
+
+        const actionRow = new ActionRowBuilder().addComponents(nameInput);
+        modal.addComponents(actionRow);
+
+        // Modal anzeigen (ohne deferReply für Modals)
+        await interaction.showModal(modal);
+        return;
+      }
+
+      console.log(`[${traceId}] Unbekannter Button: ${interaction.customId}`);
+      if (deferred) {
+        await interaction.editReply({ content: '❌ Unbekannte Aktion.' });
+      } else {
+        await interaction.reply({ content: '❌ Unbekannte Aktion.', flags: 64 });
       }
     }
 
@@ -781,10 +811,6 @@ client.on('interactionCreate', async (interaction) => {
       
       if (interaction.customId === 'ticket_rename_modal') {
         console.log(`[${traceId}] Starte Modal-Verarbeitung`);
-        
-        // SOFORT antworten um Timeout zu vermeiden
-        await interaction.deferReply({ flags: 64 });
-        console.log(`[${traceId}] DeferReply erfolgreich`);
         
         try {
           const rawName = interaction.fields.getTextInputValue('new_channel_name');
@@ -818,9 +844,16 @@ client.on('interactionCreate', async (interaction) => {
           
           // Ephemere Bestätigung
           console.log(`[${traceId}] Sende ephemere Bestätigung...`);
-          await interaction.editReply({ 
-            content: `✅ Channel erfolgreich umbenannt zu: **${sanitized}**` 
-          });
+          if (deferred) {
+            await interaction.editReply({ 
+              content: `✅ Channel erfolgreich umbenannt zu: **${sanitized}**` 
+            });
+          } else {
+            await interaction.reply({ 
+              content: `✅ Channel erfolgreich umbenannt zu: **${sanitized}**`, 
+              flags: 64 
+            });
+          }
           console.log(`[${traceId}] Ephemere Bestätigung gesendet`);
           
           // Channel-Nachricht
@@ -841,7 +874,11 @@ client.on('interactionCreate', async (interaction) => {
           
         } catch (error) {
           console.error(`[${traceId}] Fehler beim Umbenennen:`, error);
-          await interaction.editReply({ content: '❌ Fehler beim Umbenennen des Channels.' });
+          if (deferred) {
+            await interaction.editReply({ content: '❌ Fehler beim Umbenennen des Channels.' });
+          } else {
+            await interaction.reply({ content: '❌ Fehler beim Umbenennen des Channels.', flags: 64 });
+          }
         }
         return;
       }
@@ -850,17 +887,17 @@ client.on('interactionCreate', async (interaction) => {
   } catch (error) {
     console.error(`[${traceId}] Unerwarteter Fehler:`, error);
     
-    if (!interaction.replied && !interaction.deferred) {
-      try {
-        await interaction.reply({ content: '❌ Ein unerwarteter Fehler ist aufgetreten.', flags: 64 });
-      } catch (replyError) {
-        console.error(`[${traceId}] Reply-Fehler:`, replyError);
-      }
-    } else if (interaction.deferred) {
+    if (deferred) {
       try {
         await interaction.editReply({ content: '❌ Ein unerwarteter Fehler ist aufgetreten.' });
       } catch (editError) {
         console.error(`[${traceId}] Edit-Fehler:`, editError);
+      }
+    } else if (!interaction.replied && !interaction.deferred) {
+      try {
+        await interaction.reply({ content: '❌ Ein unerwarteter Fehler ist aufgetreten.', flags: 64 });
+      } catch (replyError) {
+        console.error(`[${traceId}] Reply-Fehler:`, replyError);
       }
     }
   } finally {

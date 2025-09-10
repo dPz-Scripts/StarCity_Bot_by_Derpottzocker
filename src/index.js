@@ -29,6 +29,13 @@ const BRAND = {
   banner: process.env.BRAND_BANNER_URL || null,
 };
 
+// StarCity Server Konfiguration
+const STARCITY_CONFIG = {
+  guildId: '1387455434033598514',
+  categoryId: '1387814432473874472',
+  staffRoles: ['1387483858940727502', '1393605462242627696'],
+};
+
 /* ===========================
    HILFSFUNKTIONEN
    =========================== */
@@ -201,16 +208,39 @@ async function registerSlashCommands() {
       description: 'Erstellt ein Test-Ticket (nur für dich und Staff sichtbar).',
       options: [{ name: 'charname', description: 'RP-Name der Figur', type: 3, required: true }],
     },
+    {
+      name: 'add',
+      description: 'Fügt einen Benutzer zum aktuellen Ticket hinzu.',
+      options: [{ name: 'user', description: 'Benutzer der hinzugefügt werden soll', type: 6, required: true }],
+    },
+    {
+      name: 'remove',
+      description: 'Entfernt einen Benutzer aus dem aktuellen Ticket.',
+      options: [{ name: 'user', description: 'Benutzer der entfernt werden soll', type: 6, required: true }],
+    },
+    {
+      name: 'ticket-info',
+      description: 'Zeigt Informationen über das aktuelle Ticket an.',
+    },
+    {
+      name: 'ticket-rename',
+      description: 'Benennt das aktuelle Ticket um.',
+      options: [{ name: 'name', description: 'Neuer Name für das Ticket', type: 3, required: true }],
+    },
+    {
+      name: 'ticket-close',
+      description: 'Schließt das aktuelle Ticket.',
+    },
   ];
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   const appId = (await client.application.fetch()).id;
   
   // ZUERST alle alten Commands löschen
-  await rest.put(Routes.applicationGuildCommands(appId, process.env.GUILD_ID), { body: [] });
+  await rest.put(Routes.applicationGuildCommands(appId, STARCITY_CONFIG.guildId), { body: [] });
   console.log('🗑️ Alte Slash-Commands gelöscht');
   
   // Dann neue Commands registrieren
-  await rest.put(Routes.applicationGuildCommands(appId, process.env.GUILD_ID), { body: commands });
+  await rest.put(Routes.applicationGuildCommands(appId, STARCITY_CONFIG.guildId), { body: commands });
   console.log('✅ Neue Slash-Commands registriert');
 }
 
@@ -219,7 +249,7 @@ async function registerSlashCommands() {
    =========================== */
 function hasNeededPermsIn(channelOrId) {
   try {
-    const perms = client.guilds.cache.get(process.env.GUILD_ID)?.members?.me?.permissionsIn(channelOrId);
+    const perms = client.guilds.cache.get(STARCITY_CONFIG.guildId)?.members?.me?.permissionsIn(channelOrId);
     if (!perms) return { ok: false, missing: ['UNKNOWN'] };
     const need = [
       PermissionFlagsBits.ManageChannels,
@@ -439,16 +469,18 @@ async function createTicketChannel({
 }) {
   const guild = await client.guilds.fetch(guildId);
 
-  // Kategorie validieren
+  // Kategorie validieren - StarCity Server Kategorie
   let parent = undefined;
-  if (categoryId) {
-    const cat = await guild.channels.fetch(categoryId).catch(() => null);
+  
+  if (categoryId || STARCITY_CONFIG.categoryId) {
+    const targetCategoryId = categoryId || STARCITY_CONFIG.categoryId;
+    const cat = await guild.channels.fetch(targetCategoryId).catch(() => null);
     if (cat && cat.type === ChannelType.GuildCategory) {
       const check = hasNeededPermsIn(cat.id);
       if (check.ok) parent = cat.id;
       else console.warn('⚠️ Im Kategorie-Ordner fehlen mir Rechte. Erstelle Ticket OHNE parent.');
     } else {
-      console.warn('⚠️ TICKETS_CATEGORY_ID ist keine Kategorie. Erstelle ohne parent.');
+      console.warn('⚠️ Kategorie nicht gefunden. Erstelle ohne parent.');
     }
   }
 
@@ -457,12 +489,27 @@ async function createTicketChannel({
   const channelName = `whitelist-${safeName}-${shortId}`;
   const caseId = makeCaseId();
 
-  // Berechtigungsüberschreibungen
+  // Berechtigungsüberschreibungen - StarCity Staff Rollen
   const overwrites = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-    { id: staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
     { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
   ];
+  
+  // Staff-Rollen hinzufügen
+  STARCITY_CONFIG.staffRoles.forEach(roleId => {
+    overwrites.push({ 
+      id: roleId, 
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] 
+    });
+  });
+  
+  // Fallback für alte staffRoleId falls vorhanden
+  if (staffRoleId && !STARCITY_CONFIG.staffRoles.includes(staffRoleId)) {
+    overwrites.push({ 
+      id: staffRoleId, 
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] 
+    });
+  }
   
   if (applicantDiscordId) {
     overwrites.push({ 
@@ -605,17 +652,264 @@ async function createTicketChannel({
     }
   }
 
+  // StarCity Staff Rollen für Mention
+  const staffMention = STARCITY_CONFIG.staffRoles.map(roleId => `<@&${roleId}>`).join(' ');
+  
   const sent = await channel.send({
-    content: `<@&${process.env.STAFF_ROLE_ID}> Neues Whitelist-Ticket`,
+    content: `${staffMention} Neues Whitelist-Ticket`,
     embeds: [embed],
     components: [buildTicketButtons()],
-    allowedMentions: { roles: [process.env.STAFF_ROLE_ID] },
+    allowedMentions: { roles: STARCITY_CONFIG.staffRoles },
   });
 
   meta.originalMessageId = sent.id;
   await writeTicketMeta(channel, meta);
 
   return { channel, caseId, messageId: sent.id };
+}
+
+/* ===========================
+   SLASH COMMAND HANDLER
+   =========================== */
+async function handleAddUser(interaction, traceId) {
+  try {
+    const user = interaction.options.getUser('user', true);
+    const channel = interaction.channel;
+    
+    // Prüfe ob es ein Ticket ist
+    const meta = readTicketMeta(channel);
+    if (!meta.caseId) {
+      await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
+      return;
+    }
+
+    // Berechtigungen prüfen
+    const botPerms = channel.permissionsFor(interaction.guild.members.me);
+    if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
+      await interaction.reply({ content: '❌ Mir fehlen die nötigen Berechtigungen.', flags: 64 });
+      return;
+    }
+
+    await interaction.deferReply({ flags: 64 });
+
+    // Benutzer zum Channel hinzufügen
+    await channel.permissionOverwrites.edit(user.id, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true
+    });
+
+    await interaction.editReply({ 
+      content: `✅ ${user} wurde zum Ticket hinzugefügt!` 
+    });
+
+    // Channel-Nachricht
+    const addEmbed = new EmbedBuilder()
+      .setColor(0x00FF88)
+      .setTitle('👤 Benutzer hinzugefügt')
+      .setDescription(`${user} wurde von <@${interaction.user.id}> zum Ticket hinzugefügt.`)
+      .setFooter({ text: `${meta.caseId} • Ticket-Update` })
+      .setTimestamp();
+
+    await safeChannelSend(channel, interaction.guild, { embeds: [addEmbed] }, traceId);
+
+  } catch (error) {
+    console.error(`[${traceId}] Fehler beim Hinzufügen des Benutzers:`, error);
+    await interaction.editReply({ content: '❌ Fehler beim Hinzufügen des Benutzers.' });
+  }
+}
+
+async function handleRemoveUser(interaction, traceId) {
+  try {
+    const user = interaction.options.getUser('user', true);
+    const channel = interaction.channel;
+    
+    // Prüfe ob es ein Ticket ist
+    const meta = readTicketMeta(channel);
+    if (!meta.caseId) {
+      await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
+      return;
+    }
+
+    // Berechtigungen prüfen
+    const botPerms = channel.permissionsFor(interaction.guild.members.me);
+    if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
+      await interaction.reply({ content: '❌ Mir fehlen die nötigen Berechtigungen.', flags: 64 });
+      return;
+    }
+
+    await interaction.deferReply({ flags: 64 });
+
+    // Benutzer aus Channel entfernen
+    await channel.permissionOverwrites.edit(user.id, {
+      ViewChannel: false,
+      SendMessages: false,
+      ReadMessageHistory: false
+    });
+
+    await interaction.editReply({ 
+      content: `✅ ${user} wurde aus dem Ticket entfernt!` 
+    });
+
+    // Channel-Nachricht
+    const removeEmbed = new EmbedBuilder()
+      .setColor(0xFF4444)
+      .setTitle('👤 Benutzer entfernt')
+      .setDescription(`${user} wurde von <@${interaction.user.id}> aus dem Ticket entfernt.`)
+      .setFooter({ text: `${meta.caseId} • Ticket-Update` })
+      .setTimestamp();
+
+    await safeChannelSend(channel, interaction.guild, { embeds: [removeEmbed] }, traceId);
+
+  } catch (error) {
+    console.error(`[${traceId}] Fehler beim Entfernen des Benutzers:`, error);
+    await interaction.editReply({ content: '❌ Fehler beim Entfernen des Benutzers.' });
+  }
+}
+
+async function handleTicketInfo(interaction, traceId) {
+  try {
+    const channel = interaction.channel;
+    const meta = readTicketMeta(channel);
+    
+    if (!meta.caseId) {
+      await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
+      return;
+    }
+
+    await interaction.deferReply({ flags: 64 });
+
+    const infoEmbed = new EmbedBuilder()
+      .setColor(0x00A2FF)
+      .setTitle('📋 Ticket-Informationen')
+      .addFields(
+        { name: '🎫 Case ID', value: meta.caseId, inline: true },
+        { name: '👤 Bewerber', value: meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt', inline: true },
+        { name: '📅 Erstellt', value: `<t:${Math.floor(meta.createdAt / 1000)}:R>`, inline: true },
+        { name: '📊 Status', value: meta.status, inline: true },
+        { name: '🎯 Übernommen von', value: meta.claimedBy ? `<@${meta.claimedBy}>` : 'Niemand', inline: true },
+        { name: '🔒 Geschlossen von', value: meta.closedBy ? `<@${meta.closedBy}>` : 'Niemand', inline: true }
+      )
+      .setFooter({ text: 'StarCity Bot • Ticket-Info' })
+      .setTimestamp();
+
+    if (meta.claimedAt) {
+      infoEmbed.addFields({ name: '⏰ Übernommen', value: `<t:${Math.floor(meta.claimedAt / 1000)}:R>`, inline: true });
+    }
+    if (meta.closedAt) {
+      infoEmbed.addFields({ name: '⏰ Geschlossen', value: `<t:${Math.floor(meta.closedAt / 1000)}:R>`, inline: true });
+    }
+
+    await interaction.editReply({ embeds: [infoEmbed] });
+
+  } catch (error) {
+    console.error(`[${traceId}] Fehler beim Anzeigen der Ticket-Info:`, error);
+    await interaction.editReply({ content: '❌ Fehler beim Anzeigen der Ticket-Informationen.' });
+  }
+}
+
+async function handleTicketRename(interaction, traceId) {
+  try {
+    const newName = interaction.options.getString('name', true);
+    const channel = interaction.channel;
+    const meta = readTicketMeta(channel);
+    
+    if (!meta.caseId) {
+      await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
+      return;
+    }
+
+    await interaction.deferReply({ flags: 64 });
+
+    const sanitized = newName
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/-{2,}/g, '-')
+      .slice(0, 100) || 'ticket';
+
+    const oldName = channel.name;
+    await channel.setName(sanitized);
+
+    // Meta aktualisieren
+    meta.renamedBy = interaction.user.id;
+    meta.renamedAt = Date.now();
+    meta.originalName = oldName;
+    ticketMetaStorage.set(channel.id, meta);
+
+    await interaction.editReply({ 
+      content: `✅ Ticket erfolgreich umbenannt zu: **${sanitized}**` 
+    });
+
+    // Channel-Nachricht
+    const renameEmbed = new EmbedBuilder()
+      .setColor(0xFFA500)
+      .setTitle('✏️ Ticket umbenannt')
+      .setDescription(`<@${interaction.user.id}> hat das Ticket umbenannt.`)
+      .addFields(
+        { name: 'Neuer Name', value: `\`${sanitized}\``, inline: true },
+        { name: 'Alter Name', value: `\`${oldName}\``, inline: true }
+      )
+      .setFooter({ text: `${meta.caseId} • Ticket-Update` })
+      .setTimestamp();
+
+    await safeChannelSend(channel, interaction.guild, { embeds: [renameEmbed] }, traceId);
+
+  } catch (error) {
+    console.error(`[${traceId}] Fehler beim Umbenennen:`, error);
+    await interaction.editReply({ content: '❌ Fehler beim Umbenennen des Tickets.' });
+  }
+}
+
+async function handleTicketClose(interaction, traceId) {
+  try {
+    const channel = interaction.channel;
+    const meta = readTicketMeta(channel);
+    
+    if (!meta.caseId) {
+      await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
+      return;
+    }
+
+    if (meta.status === 'closed') {
+      await interaction.reply({ content: '⚠️ Das Ticket ist bereits geschlossen.', flags: 64 });
+      return;
+    }
+
+    await interaction.deferReply({ flags: 64 });
+
+    // Meta aktualisieren
+    meta.closedBy = interaction.user.id;
+    meta.closedAt = Date.now();
+    meta.status = 'closed';
+    ticketMetaStorage.set(channel.id, meta);
+
+    // Buttons aktualisieren
+    const newButtons = buildTicketButtons({ claimed: !!meta.claimedBy, closed: true });
+    await interaction.message?.edit({ components: [newButtons] }).catch(() => {});
+
+    await interaction.editReply({ 
+      content: `🔒 Ticket erfolgreich geschlossen!` 
+    });
+
+    // Channel-Nachricht
+    const closeEmbed = new EmbedBuilder()
+      .setColor(0xFF4444)
+      .setTitle('🔒 Ticket geschlossen')
+      .setDescription(`<@${interaction.user.id}> hat das Ticket geschlossen.`)
+      .setFooter({ text: `${meta.caseId} • Status: Geschlossen` })
+      .setTimestamp();
+
+    await safeChannelSend(channel, interaction.guild, { embeds: [closeEmbed] }, traceId);
+
+    // Channel sperren
+    await lockChannel(channel, meta.applicantDiscordId);
+
+  } catch (error) {
+    console.error(`[${traceId}] Fehler beim Schließen:`, error);
+    await interaction.editReply({ content: '❌ Fehler beim Schließen des Tickets.' });
+  }
 }
 
 /* ===========================
@@ -630,76 +924,113 @@ client.on('interactionCreate', async (interaction) => {
   try {
     // SLASH COMMANDS
     if (interaction.isChatInputCommand()) {
-      if (interaction.commandName !== 'ticket-test') return;
+      const commandName = interaction.commandName;
       
-      const charName = interaction.options.getString('charname', true);
-      const key = idempotency.createKey('slash', process.env.GUILD_ID, interaction.user.id, charName);
-      
-      // Idempotenz prüfen
-      const check = idempotency.isAllowed(key);
-      if (!check.allowed) {
-        const message = check.reason === 'inflight' 
-          ? '⏳ Ticket wird bereits erstellt...' 
-          : `⏳ Zu viele Tickets in kurzer Zeit. Bitte warte ${check.age || 60} Sekunden.`;
+      // Staff-Check für alle Commands außer ticket-test
+      if (commandName !== 'ticket-test') {
+        const isStaff = STARCITY_CONFIG.staffRoles.some(roleId => 
+          interaction.member?.roles?.cache?.has?.(roleId)
+        ) || false;
         
-        await interaction.reply({ content: message, flags: 64 });
+        if (!isStaff) {
+          await interaction.reply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.', flags: 64 });
+          return;
+        }
+      }
+      
+      // Command-spezifische Handler
+      if (commandName === 'ticket-test') {
+        const charName = interaction.options.getString('charname', true);
+        const key = idempotency.createKey('slash', STARCITY_CONFIG.guildId, interaction.user.id, charName);
+        
+        // Idempotenz prüfen
+        const check = idempotency.isAllowed(key);
+        if (!check.allowed) {
+          const message = check.reason === 'inflight' 
+            ? '⏳ Ticket wird bereits erstellt...' 
+            : `⏳ Zu viele Tickets in kurzer Zeit. Bitte warte ${check.age || 60} Sekunden.`;
+          
+          await interaction.reply({ content: message, flags: 64 });
+          return;
+        }
+
+        // SOFORT antworten um Timeout zu vermeiden
+        await interaction.deferReply({ flags: 64 });
+
+        try {
+          const { channel } = await createTicketChannel({
+            guildId: STARCITY_CONFIG.guildId,
+            categoryId: STARCITY_CONFIG.categoryId,
+            staffRoleId: null, // Nicht mehr benötigt, da hardcoded
+            applicantDiscordId: interaction.user.id,
+            applicantTag: interaction.user.username,
+            form: {
+              charName,
+              alter: 19,
+              steamHex: '110000112345678',
+              discordTag: interaction.user.username,
+              howFound: 'Über einen Freund',
+              deskItem: 'Kaffee & Notizbuch',
+              timezone: 'Europe/Berlin',
+              websiteTicketId: 'SC-TEST-001',
+              answers: [
+                { question: 'Woran kannst du dich erinnern, wenn dir ein Medic geholfen hat?', answer: 'Nicht an Details der Verletzung.' },
+                { question: 'Darf der FiveM-Account geteilt werden?', answer: 'Nein.' },
+                { question: 'Max. Mitglieder in einer Fraktion?', answer: '10' },
+              ],
+            },
+          });
+
+          await interaction.editReply({ 
+            content: `✅ Ticket erfolgreich erstellt: https://discord.com/channels/${STARCITY_CONFIG.guildId}/${channel.id}` 
+          });
+          
+        } catch (error) {
+          console.error(`[${traceId}] Ticket-Erstellung fehlgeschlagen:`, error);
+          await interaction.editReply({ content: '❌ Fehler beim Erstellen des Tickets. Bitte versuche es erneut.' });
+        } finally {
+          idempotency.markComplete(key);
+        }
         return;
       }
 
-      // SOFORT antworten um Timeout zu vermeiden
-      await interaction.deferReply({ flags: 64 });
-
-      try {
-        const { channel } = await createTicketChannel({
-          guildId: process.env.GUILD_ID,
-          categoryId: process.env.TICKETS_CATEGORY_ID,
-          staffRoleId: process.env.STAFF_ROLE_ID,
-          applicantDiscordId: interaction.user.id,
-          applicantTag: interaction.user.username,
-          form: {
-            charName,
-            alter: 19,
-            steamHex: '110000112345678',
-            discordTag: interaction.user.username,
-            howFound: 'Über einen Freund',
-            deskItem: 'Kaffee & Notizbuch',
-            timezone: 'Europe/Berlin',
-            websiteTicketId: 'SC-TEST-001',
-            answers: [
-              { question: 'Woran kannst du dich erinnern, wenn dir ein Medic geholfen hat?', answer: 'Nicht an Details der Verletzung.' },
-              { question: 'Darf der FiveM-Account geteilt werden?', answer: 'Nein.' },
-              { question: 'Max. Mitglieder in einer Fraktion?', answer: '10' },
-            ],
-          },
-        });
-
-        await interaction.editReply({ 
-          content: `✅ Ticket erfolgreich erstellt: https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` 
-        });
-        
-      } catch (error) {
-        console.error(`[${traceId}] Ticket-Erstellung fehlgeschlagen:`, error);
-        await interaction.editReply({ content: '❌ Fehler beim Erstellen des Tickets. Bitte versuche es erneut.' });
-      } finally {
-        idempotency.markComplete(key);
+      // Staff-Commands (alle anderen)
+      if (commandName === 'add') {
+        await handleAddUser(interaction, traceId);
+        return;
       }
-      
-      return;
+
+      if (commandName === 'remove') {
+        await handleRemoveUser(interaction, traceId);
+        return;
+      }
+
+      if (commandName === 'ticket-info') {
+        await handleTicketInfo(interaction, traceId);
+        return;
+      }
+
+      if (commandName === 'ticket-rename') {
+        await handleTicketRename(interaction, traceId);
+        return;
+      }
+
+      if (commandName === 'ticket-close') {
+        await handleTicketClose(interaction, traceId);
+        return;
+      }
     }
 
     // BUTTON INTERACTIONS
     if (interaction.isButton()) {
       console.log(`[${traceId}] Button-Klick: ${interaction.customId}`);
       
-      const staffRoleId = process.env.STAFF_ROLE_ID;
-      if (!staffRoleId) {
-        console.log(`[${traceId}] STAFF_ROLE_ID nicht konfiguriert`);
-        await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht konfiguriert.', flags: 64 });
-        return;
-      }
-
-      const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
-      console.log(`[${traceId}] Staff-Check: ${isStaff} (Role: ${staffRoleId})`);
+      // StarCity Staff Rollen prüfen
+      const isStaff = STARCITY_CONFIG.staffRoles.some(roleId => 
+        interaction.member?.roles?.cache?.has?.(roleId)
+      ) || false;
+      
+      console.log(`[${traceId}] Staff-Check: ${isStaff} (StarCity Staff Rollen: ${STARCITY_CONFIG.staffRoles.join(', ')})`);
       if (!isStaff) {
         await interaction.reply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.', flags: 64 });
         return;
@@ -1130,9 +1461,9 @@ app.post('/whitelist', async (req, res) => {
 
     console.log(`[${traceId}] Ticket-Channel wird erstellt`);
     const { channel, caseId } = await createTicketChannel({
-      guildId: process.env.GUILD_ID,
-      categoryId: process.env.TICKETS_CATEGORY_ID,
-      staffRoleId: process.env.STAFF_ROLE_ID,
+      guildId: STARCITY_CONFIG.guildId,
+      categoryId: STARCITY_CONFIG.categoryId,
+      staffRoleId: null, // Nicht mehr benötigt, da hardcoded
       applicantDiscordId: discordId,
       applicantTag: discordTag,
       form: {
@@ -1150,7 +1481,7 @@ app.post('/whitelist', async (req, res) => {
       ok: true, 
       caseId, 
       channelId: channel.id, 
-      url: `https://discord.com/channels/${process.env.GUILD_ID}/${channel.id}` 
+      url: `https://discord.com/channels/${STARCITY_CONFIG.guildId}/${channel.id}` 
     });
     
   } catch (error) {

@@ -538,12 +538,12 @@ client.on('interactionCreate', async (interaction) => {
           ? '⏳ Ticket wird bereits erstellt...' 
           : `⏳ Zu viele Tickets in kurzer Zeit. Bitte warte ${check.age || 60} Sekunden.`;
         
-        await interaction.reply({ content: message, ephemeral: true });
+        await interaction.reply({ content: message, flags: 64 });
         return;
       }
 
       // SOFORT antworten um Timeout zu vermeiden
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       try {
         const { channel } = await createTicketChannel({
@@ -587,21 +587,18 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       console.log(`[${traceId}] Button-Klick: ${interaction.customId}`);
       
-      // SOFORT antworten um Timeout zu vermeiden
-      await interaction.deferReply({ ephemeral: true });
-      
       try {
         const staffRoleId = process.env.STAFF_ROLE_ID;
         if (!staffRoleId) {
           console.log(`[${traceId}] STAFF_ROLE_ID nicht konfiguriert`);
-          await interaction.editReply({ content: '⚠️ STAFF_ROLE_ID nicht konfiguriert.' });
+          await interaction.reply({ content: '⚠️ STAFF_ROLE_ID nicht konfiguriert.', flags: 64 });
           return;
         }
 
         const isStaff = interaction.member?.roles?.cache?.has?.(staffRoleId) || false;
         console.log(`[${traceId}] Staff-Check: ${isStaff} (Role: ${staffRoleId})`);
         if (!isStaff) {
-          await interaction.editReply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.' });
+          await interaction.reply({ content: '❌ Nur Staff-Mitglieder können diese Aktion ausführen.', flags: 64 });
           return;
         }
 
@@ -611,7 +608,7 @@ client.on('interactionCreate', async (interaction) => {
         
         if (!meta.caseId) {
           console.log(`[${traceId}] Kein gültiges Ticket (kein caseId)`);
-          await interaction.editReply({ content: '❌ Dies ist kein gültiges Ticket.' });
+          await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
           return;
         }
 
@@ -619,16 +616,19 @@ client.on('interactionCreate', async (interaction) => {
         const botPerms = channel.permissionsFor(interaction.guild.members.me);
         if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
           console.log(`[${traceId}] Fehlende ManageChannels-Berechtigung`);
-          await interaction.editReply({ content: '❌ Mir fehlen die nötigen Berechtigungen.' });
+          await interaction.reply({ content: '❌ Mir fehlen die nötigen Berechtigungen.', flags: 64 });
           return;
         }
 
         if (interaction.customId === 'ticket_claim') {
           console.log(`[${traceId}] Verarbeite Ticket-Übernahme`);
           if (meta.claimedBy) {
-            await interaction.editReply({ content: '⚠️ Dieses Ticket wurde bereits übernommen.' });
+            await interaction.reply({ content: '⚠️ Dieses Ticket wurde bereits übernommen.', flags: 64 });
             return;
           }
+
+          // SOFORT antworten um Timeout zu vermeiden
+          await interaction.deferReply({ flags: 64 });
 
           // Ephemere Bestätigung
           await interaction.editReply({ content: '✅ Ticket erfolgreich übernommen!' });
@@ -679,6 +679,9 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.customId === 'ticket_close') {
           console.log(`[${traceId}] Verarbeite Ticket-Schließung`);
           
+          // SOFORT antworten um Timeout zu vermeiden
+          await interaction.deferReply({ flags: 64 });
+
           // Ephemere Bestätigung
           await interaction.editReply({ content: '🔒 Ticket erfolgreich geschlossen!' });
 
@@ -754,17 +757,18 @@ client.on('interactionCreate', async (interaction) => {
           const actionRow = new ActionRowBuilder().addComponents(nameInput);
           modal.addComponents(actionRow);
 
+          // Modal anzeigen (ohne deferReply für Modals)
           await interaction.showModal(modal);
           return;
         }
 
         console.log(`[${traceId}] Unbekannter Button: ${interaction.customId}`);
-        await interaction.editReply({ content: '❌ Unbekannte Aktion.' });
+        await interaction.reply({ content: '❌ Unbekannte Aktion.', flags: 64 });
         
       } catch (buttonError) {
         console.error(`[${traceId}] Button-Fehler:`, buttonError);
         if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({ content: '❌ Fehler bei der Button-Aktion.', ephemeral: true });
+          await interaction.reply({ content: '❌ Fehler bei der Button-Aktion.', flags: 64 });
         } else {
           await interaction.editReply({ content: '❌ Fehler bei der Button-Aktion.' });
         }
@@ -779,7 +783,7 @@ client.on('interactionCreate', async (interaction) => {
         console.log(`[${traceId}] Starte Modal-Verarbeitung`);
         
         // SOFORT antworten um Timeout zu vermeiden
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: 64 });
         console.log(`[${traceId}] DeferReply erfolgreich`);
         
         try {
@@ -848,7 +852,7 @@ client.on('interactionCreate', async (interaction) => {
     
     if (!interaction.replied && !interaction.deferred) {
       try {
-        await interaction.reply({ content: '❌ Ein unerwarteter Fehler ist aufgetreten.', ephemeral: true });
+        await interaction.reply({ content: '❌ Ein unerwarteter Fehler ist aufgetreten.', flags: 64 });
       } catch (replyError) {
         console.error(`[${traceId}] Reply-Fehler:`, replyError);
       }

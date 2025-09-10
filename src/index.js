@@ -983,13 +983,14 @@ client.on('interactionCreate', async (interaction) => {
           ticketMetaStorage.set(interaction.channel.id, meta);
           console.log(`[${traceId}] Meta-Daten in Storage gespeichert`);
           
-          // writeTicketMeta asynchron im Hintergrund (nicht blockierend)
+          // Topic-Update asynchron im Hintergrund (nicht blockierend)
           setImmediate(async () => {
             try {
-              await writeTicketMeta(interaction.channel, meta);
-              console.log(`[${traceId}] Meta-Daten asynchron aktualisiert`);
-            } catch (metaError) {
-              console.warn(`[${traceId}] Meta-Daten-Update fehlgeschlagen:`, metaError);
+              const topicText = `Whitelist-Ticket ${meta.caseId} | Status: ${meta.status} | Bewerber: ${meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt'}`;
+              await interaction.channel.setTopic(topicText);
+              console.log(`[${traceId}] Topic asynchron aktualisiert`);
+            } catch (topicError) {
+              console.warn(`[${traceId}] Topic-Update fehlgeschlagen:`, topicError);
             }
           });
           

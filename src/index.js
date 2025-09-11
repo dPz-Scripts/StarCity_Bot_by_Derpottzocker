@@ -231,6 +231,10 @@ async function registerSlashCommands() {
       name: 'ticket-close',
       description: 'Schließt das aktuelle Ticket.',
     },
+    {
+      name: 'ticket-transcript',
+      description: 'Erstellt ein Transcript des aktuellen Tickets.',
+    },
   ];
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   const appId = (await client.application.fetch()).id;
@@ -669,6 +673,80 @@ async function createTicketChannel({
 }
 
 /* ===========================
+   TRANSCRIPT FUNKTION
+   =========================== */
+async function createTranscript(channel, meta) {
+  try {
+    console.log(`Erstelle Transcript für Channel ${channel.id}`);
+    
+    const messages = [];
+    let lastId = null;
+    let messageCount = 0;
+    const maxMessages = 1000; // Limit für Performance
+    
+    // Nachrichten sammeln
+    while (messageCount < maxMessages) {
+      const options = { limit: 100 };
+      if (lastId) options.before = lastId;
+      
+      const batch = await channel.messages.fetch(options);
+      if (batch.size === 0) break;
+      
+      for (const message of batch.values()) {
+        messages.unshift(message); // Älteste zuerst
+        messageCount++;
+      }
+      
+      lastId = batch.last()?.id;
+    }
+    
+    // Transcript erstellen
+    const transcript = [];
+    transcript.push(`# Transcript für Ticket ${meta.caseId}`);
+    transcript.push(`**Erstellt:** <t:${Math.floor(meta.createdAt / 1000)}:F>`);
+    transcript.push(`**Bewerber:** ${meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt'}`);
+    transcript.push(`**Status:** ${meta.status}`);
+    if (meta.claimedBy) transcript.push(`**Übernommen von:** <@${meta.claimedBy}>`);
+    if (meta.closedBy) transcript.push(`**Geschlossen von:** <@${meta.closedBy}>`);
+    transcript.push(`**Channel:** #${channel.name}`);
+    transcript.push(`**Erstellt am:** <t:${Math.floor(Date.now() / 1000)}:F>`);
+    transcript.push('');
+    transcript.push('---');
+    transcript.push('');
+    
+    // Nachrichten hinzufügen
+    for (const message of messages) {
+      const timestamp = `<t:${Math.floor(message.createdTimestamp / 1000)}:T>`;
+      const author = message.author.tag;
+      const content = message.content || '*[Kein Text]*';
+      
+      transcript.push(`[${timestamp}] ${author}: ${content}`);
+      
+      // Embeds hinzufügen
+      if (message.embeds.length > 0) {
+        for (const embed of message.embeds) {
+          if (embed.title) transcript.push(`  📋 ${embed.title}`);
+          if (embed.description) transcript.push(`  ${embed.description}`);
+        }
+      }
+      
+      // Attachments hinzufügen
+      if (message.attachments.size > 0) {
+        for (const attachment of message.attachments.values()) {
+          transcript.push(`  📎 ${attachment.name} (${attachment.url})`);
+        }
+      }
+    }
+    
+    return transcript.join('\n');
+    
+  } catch (error) {
+    console.error(`Fehler beim Erstellen des Transcripts:`, error);
+    return `# Transcript für Ticket ${meta.caseId}\n\nFehler beim Erstellen des Transcripts: ${error.message}`;
+  }
+}
+
+/* ===========================
    SLASH COMMAND HANDLER
    =========================== */
 async function handleAddUser(interaction, traceId) {
@@ -819,6 +897,7 @@ async function handleTicketRename(interaction, traceId) {
       return;
     }
 
+    // SOFORT antworten
     await interaction.deferReply({ flags: 64 });
 
     const sanitized = newName
@@ -830,31 +909,40 @@ async function handleTicketRename(interaction, traceId) {
       .slice(0, 100) || 'ticket';
 
     const oldName = channel.name;
+    
+    // Channel umbenennen (synchron)
     await channel.setName(sanitized);
 
-    // Meta aktualisieren
+    // Meta aktualisieren (schnell)
     meta.renamedBy = interaction.user.id;
     meta.renamedAt = Date.now();
     meta.originalName = oldName;
     ticketMetaStorage.set(channel.id, meta);
 
+    // SOFORT Bestätigung senden
     await interaction.editReply({ 
       content: `✅ Ticket erfolgreich umbenannt zu: **${sanitized}**` 
     });
 
-    // Channel-Nachricht
-    const renameEmbed = new EmbedBuilder()
-      .setColor(0xFFA500)
-      .setTitle('✏️ Ticket umbenannt')
-      .setDescription(`<@${interaction.user.id}> hat das Ticket umbenannt.`)
-      .addFields(
-        { name: 'Neuer Name', value: `\`${sanitized}\``, inline: true },
-        { name: 'Alter Name', value: `\`${oldName}\``, inline: true }
-      )
-      .setFooter({ text: `${meta.caseId} • Ticket-Update` })
-      .setTimestamp();
+    // Channel-Nachricht asynchron im Hintergrund (nicht blockierend)
+    setImmediate(async () => {
+      try {
+        const renameEmbed = new EmbedBuilder()
+          .setColor(0xFFA500)
+          .setTitle('✏️ Ticket umbenannt')
+          .setDescription(`<@${interaction.user.id}> hat das Ticket umbenannt.`)
+          .addFields(
+            { name: 'Neuer Name', value: `\`${sanitized}\``, inline: true },
+            { name: 'Alter Name', value: `\`${oldName}\``, inline: true }
+          )
+          .setFooter({ text: `${meta.caseId} • Ticket-Update` })
+          .setTimestamp();
 
-    await safeChannelSend(channel, interaction.guild, { embeds: [renameEmbed] }, traceId);
+        await safeChannelSend(channel, interaction.guild, { embeds: [renameEmbed] }, traceId);
+      } catch (error) {
+        console.warn(`[${traceId}] Fehler bei Channel-Nachricht für Rename:`, error);
+      }
+    });
 
   } catch (error) {
     console.error(`[${traceId}] Fehler beim Umbenennen:`, error);
@@ -890,7 +978,7 @@ async function handleTicketClose(interaction, traceId) {
     await interaction.message?.edit({ components: [newButtons] }).catch(() => {});
 
     await interaction.editReply({ 
-      content: `🔒 Ticket erfolgreich geschlossen!` 
+      content: `🔒 Ticket erfolgreich geschlossen! Transcript wird erstellt...` 
     });
 
     // Channel-Nachricht
@@ -906,9 +994,123 @@ async function handleTicketClose(interaction, traceId) {
     // Channel sperren
     await lockChannel(channel, meta.applicantDiscordId);
 
+    // Transcript erstellen und Channel löschen (asynchron im Hintergrund)
+    setImmediate(async () => {
+      try {
+        console.log(`[${traceId}] Erstelle Transcript für geschlossenes Ticket ${meta.caseId}`);
+        
+        // Transcript erstellen
+        const transcript = await createTranscript(channel, meta);
+        
+        // Transcript in einen Log-Channel senden (falls vorhanden)
+        const logChannelId = process.env.LOG_CHANNEL_ID;
+        if (logChannelId) {
+          try {
+            const logChannel = await interaction.guild.channels.fetch(logChannelId);
+            if (logChannel) {
+              // Transcript in Datei umwandeln
+              const buffer = Buffer.from(transcript, 'utf8');
+              const attachment = {
+                name: `transcript-${meta.caseId}-${Date.now()}.md`,
+                attachment: buffer
+              };
+              
+              const transcriptEmbed = new EmbedBuilder()
+                .setColor(0x00A2FF)
+                .setTitle('📄 Ticket Transcript erstellt')
+                .setDescription(`Transcript für Ticket **${meta.caseId}** wurde erstellt.`)
+                .addFields(
+                  { name: 'Channel', value: `#${channel.name}`, inline: true },
+                  { name: 'Bewerber', value: meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt', inline: true },
+                  { name: 'Geschlossen von', value: `<@${meta.closedBy}>`, inline: true }
+                )
+                .setTimestamp();
+              
+              await logChannel.send({ 
+                embeds: [transcriptEmbed], 
+                files: [attachment] 
+              });
+              
+              console.log(`[${traceId}] Transcript erfolgreich in Log-Channel gesendet`);
+            }
+          } catch (logError) {
+            console.warn(`[${traceId}] Fehler beim Senden des Transcripts:`, logError);
+          }
+        }
+        
+        // Warte 5 Sekunden, dann Channel löschen
+        setTimeout(async () => {
+          try {
+            console.log(`[${traceId}] Lösche Channel ${channel.id} nach 5 Sekunden`);
+            await channel.delete('Ticket geschlossen - automatische Löschung');
+            console.log(`[${traceId}] Channel erfolgreich gelöscht`);
+          } catch (deleteError) {
+            console.error(`[${traceId}] Fehler beim Löschen des Channels:`, deleteError);
+          }
+        }, 5000);
+        
+      } catch (transcriptError) {
+        console.error(`[${traceId}] Fehler beim Erstellen des Transcripts:`, transcriptError);
+        
+        // Channel trotzdem nach 10 Sekunden löschen
+        setTimeout(async () => {
+          try {
+            await channel.delete('Ticket geschlossen - automatische Löschung (ohne Transcript)');
+          } catch (deleteError) {
+            console.error(`[${traceId}] Fehler beim Löschen des Channels:`, deleteError);
+          }
+        }, 10000);
+      }
+    });
+
   } catch (error) {
     console.error(`[${traceId}] Fehler beim Schließen:`, error);
     await interaction.editReply({ content: '❌ Fehler beim Schließen des Tickets.' });
+  }
+}
+
+async function handleTicketTranscript(interaction, traceId) {
+  try {
+    const channel = interaction.channel;
+    const meta = readTicketMeta(channel);
+    
+    if (!meta.caseId) {
+      await interaction.reply({ content: '❌ Dies ist kein gültiges Ticket.', flags: 64 });
+      return;
+    }
+
+    await interaction.deferReply({ flags: 64 });
+
+    // Transcript erstellen
+    const transcript = await createTranscript(channel, meta);
+    
+    // Transcript in Datei umwandeln
+    const buffer = Buffer.from(transcript, 'utf8');
+    const attachment = {
+      name: `transcript-${meta.caseId}-${Date.now()}.md`,
+      attachment: buffer
+    };
+    
+    const transcriptEmbed = new EmbedBuilder()
+      .setColor(0x00A2FF)
+      .setTitle('📄 Ticket Transcript')
+      .setDescription(`Transcript für Ticket **${meta.caseId}** wurde erstellt.`)
+      .addFields(
+        { name: 'Channel', value: `#${channel.name}`, inline: true },
+        { name: 'Bewerber', value: meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt', inline: true },
+        { name: 'Status', value: meta.status, inline: true }
+      )
+      .setFooter({ text: 'StarCity Bot • Transcript' })
+      .setTimestamp();
+
+    await interaction.editReply({ 
+      embeds: [transcriptEmbed], 
+      files: [attachment] 
+    });
+
+  } catch (error) {
+    console.error(`[${traceId}] Fehler beim Erstellen des Transcripts:`, error);
+    await interaction.editReply({ content: '❌ Fehler beim Erstellen des Transcripts.' });
   }
 }
 
@@ -1017,6 +1219,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (commandName === 'ticket-close') {
         await handleTicketClose(interaction, traceId);
+        return;
+      }
+
+      if (commandName === 'ticket-transcript') {
+        await handleTicketTranscript(interaction, traceId);
         return;
       }
     }

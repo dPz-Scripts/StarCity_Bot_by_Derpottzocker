@@ -34,6 +34,7 @@ const STARCITY_CONFIG = {
   guildId: '1387455434033598514',
   categoryId: '1387814432473874472',
   staffRoles: ['1387483858940727502', '1393605462242627696'],
+  logChannelId: '1393651526236508270',
 };
 
 /* ===========================
@@ -1002,8 +1003,8 @@ async function handleTicketClose(interaction, traceId) {
         // Transcript erstellen
         const transcript = await createTranscript(channel, meta);
         
-        // Transcript in einen Log-Channel senden (falls vorhanden)
-        const logChannelId = process.env.LOG_CHANNEL_ID;
+        // Transcript in den festen Log-Channel senden
+        const logChannelId = STARCITY_CONFIG.logChannelId;
         if (logChannelId) {
           try {
             const logChannel = await interaction.guild.channels.fetch(logChannelId);
@@ -1026,9 +1027,10 @@ async function handleTicketClose(interaction, traceId) {
                 )
                 .setTimestamp();
               
-              await logChannel.send({ 
-                embeds: [transcriptEmbed], 
-                files: [attachment] 
+              await logChannel.send({
+                content: `📥 Geschlossenes Ticket verarbeitet: ${meta.caseId}`,
+                embeds: [transcriptEmbed],
+                files: [attachment]
               });
               
               console.log(`[${traceId}] Transcript erfolgreich in Log-Channel gesendet`);
@@ -1038,12 +1040,14 @@ async function handleTicketClose(interaction, traceId) {
           }
         }
         
-        // Warte 5 Sekunden, dann Channel löschen
+        // Warte 5 Sekunden, dann Channel löschen und Ticket aus Storage entfernen
         setTimeout(async () => {
           try {
             console.log(`[${traceId}] Lösche Channel ${channel.id} nach 5 Sekunden`);
             await channel.delete('Ticket geschlossen - automatische Löschung');
             console.log(`[${traceId}] Channel erfolgreich gelöscht`);
+            ticketMetaStorage.delete(channel.id);
+            console.log(`[${traceId}] Ticket-Metadaten entfernt`);
           } catch (deleteError) {
             console.error(`[${traceId}] Fehler beim Löschen des Channels:`, deleteError);
           }
@@ -1052,10 +1056,11 @@ async function handleTicketClose(interaction, traceId) {
       } catch (transcriptError) {
         console.error(`[${traceId}] Fehler beim Erstellen des Transcripts:`, transcriptError);
         
-        // Channel trotzdem nach 10 Sekunden löschen
+        // Channel trotzdem nach 10 Sekunden löschen und Ticket aus Storage entfernen
         setTimeout(async () => {
           try {
             await channel.delete('Ticket geschlossen - automatische Löschung (ohne Transcript)');
+            ticketMetaStorage.delete(channel.id);
           } catch (deleteError) {
             console.error(`[${traceId}] Fehler beim Löschen des Channels:`, deleteError);
           }

@@ -25,8 +25,12 @@ const STARSTYLE_VERSION = 'StarCity style v7.0 - Complete Rebuild';
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
   color: parseInt((process.env.BRAND_COLOR || '00A2FF').replace('#', ''), 16),
-  icon: process.env.BRAND_ICON_URL || null,
-  banner: process.env.BRAND_BANNER_URL || null,
+  icon: process.env.BRAND_ICON_URL
+    ? process.env.BRAND_ICON_URL
+    : (process.env.SELF_URL ? `${process.env.SELF_URL}/assets/sclogo1.png` : null),
+  banner: process.env.BRAND_BANNER_URL
+    ? process.env.BRAND_BANNER_URL
+    : (process.env.SELF_URL ? `${process.env.SELF_URL}/assets/StarCityBanner1.jpg` : null),
 };
 
 // StarCity Server Konfiguration
@@ -169,7 +173,12 @@ const ticketMetaStorage = new TicketMetaStorage();
    DISCORD CLIENT
    =========================== */
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 client.once('clientReady', async () => {
@@ -1411,7 +1420,61 @@ client.on('interactionCreate', async (interaction) => {
           } catch (lockError) {
             console.error(`[${traceId}] Fehler beim Sperren des Channels:`, lockError);
           }
-          
+
+          // Transcript + Log + Löschen (wie bei Slash-Command)
+          setImmediate(async () => {
+            try {
+              const transcript = await createTranscript(channel, meta);
+              const logChannelId = STARCITY_CONFIG.logChannelId;
+              if (logChannelId) {
+                try {
+                  const logChannel = await interaction.guild.channels.fetch(logChannelId);
+                  if (logChannel) {
+                    const buffer = Buffer.from(transcript, 'utf8');
+                    const attachment = {
+                      name: `transcript-${meta.caseId}-${Date.now()}.md`,
+                      attachment: buffer
+                    };
+                    const transcriptEmbed = new EmbedBuilder()
+                      .setColor(0x00A2FF)
+                      .setTitle('📄 Ticket Transcript erstellt')
+                      .setDescription(`Transcript für Ticket **${meta.caseId}** wurde erstellt.`)
+                      .addFields(
+                        { name: 'Channel', value: `#${channel.name}`, inline: true },
+                        { name: 'Bewerber', value: meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt', inline: true },
+                        { name: 'Geschlossen von', value: `<@${meta.closedBy}>`, inline: true }
+                      )
+                      .setTimestamp();
+                    await logChannel.send({
+                      content: `📥 Geschlossenes Ticket verarbeitet: ${meta.caseId}`,
+                      embeds: [transcriptEmbed],
+                      files: [attachment]
+                    });
+                  }
+                } catch (e) {
+                  console.warn(`[${traceId}] Konnte Transcript nicht in Log-Channel senden:`, e);
+                }
+              }
+
+              setTimeout(async () => {
+                try {
+                  await channel.delete('Ticket geschlossen - automatische Löschung');
+                  ticketMetaStorage.delete(channel.id);
+                } catch (e) {
+                  console.error(`[${traceId}] Fehler beim Löschen des Channels:`, e);
+                }
+              }, 5000);
+            } catch (e) {
+              console.error(`[${traceId}] Fehler im Close-Flow (Button):`, e);
+              setTimeout(async () => {
+                try {
+                  await channel.delete('Ticket geschlossen - automatische Löschung (Fallback)');
+                  ticketMetaStorage.delete(channel.id);
+                } catch {}
+              }, 10000);
+            }
+          });
+
           return;
         }
 
@@ -1490,16 +1553,14 @@ client.on('interactionCreate', async (interaction) => {
           const oldName = interaction.channel.name;
           console.log(`[${traceId}] Alter Channel-Name: ${oldName}`);
 
-          // Channel umbenennen (asynchron im Hintergrund - NICHT blockierend)
-          console.log(`[${traceId}] Starte Channel-Umbenennung...`);
-          setImmediate(async () => {
-            try {
-              await interaction.channel.setName(sanitized);
-              console.log(`[${traceId}] Channel erfolgreich umbenannt zu: ${sanitized}`);
-            } catch (renameError) {
-              console.warn(`[${traceId}] Channel-Umbenennung fehlgeschlagen:`, renameError);
-            }
-          });
+          // Channel umbenennen (sofort ausführen)
+          console.log(`[${traceId}] Benenne Channel um...`);
+          try {
+            await interaction.channel.setName(sanitized);
+            console.log(`[${traceId}] Channel erfolgreich umbenannt zu: ${sanitized}`);
+          } catch (renameError) {
+            console.warn(`[${traceId}] Channel-Umbenennung fehlgeschlagen:`, renameError);
+          }
           
           // Meta aktualisieren (ohne auf Channel-Umbenennung zu warten)
           console.log(`[${traceId}] Aktualisiere Meta-Daten...`);
@@ -1608,6 +1669,12 @@ client.on('interactionCreate', async (interaction) => {
    EXPRESS SERVER & HMAC
    =========================== */
 const app = express();
+
+// Static assets (for logo/banner)
+try {
+  app.use('/assets', express.static('assets'));
+  console.log('🖼️ Static assets route enabled at /assets');
+} catch {}
 
 app.get('/health', (_req, res) => res.send('StarCity Bot alive'));
 app.get('/version', (_req, res) => res.json({ version: STARSTYLE_VERSION }));

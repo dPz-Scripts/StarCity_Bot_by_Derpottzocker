@@ -22,15 +22,17 @@ import {
    =========================== */
 const STARSTYLE_VERSION = 'StarCity style v7.0 - Complete Rebuild';
 
+const ASSET_VER = process.env.ASSET_VER || String(Math.floor(Date.now() / 1000));
+
 const BRAND = {
   name: process.env.BRAND_NAME || 'StarCity || Beta-Whitelist OPEN',
   color: parseInt((process.env.BRAND_COLOR || '00A2FF').replace('#', ''), 16),
   icon: process.env.BRAND_ICON_URL
     ? process.env.BRAND_ICON_URL
-    : (process.env.SELF_URL ? `${process.env.SELF_URL}/assets/sclogo1.png` : null),
+    : (process.env.SELF_URL ? `${process.env.SELF_URL}/assets/sclogo1.png?v=${ASSET_VER}` : null),
   banner: process.env.BRAND_BANNER_URL
     ? process.env.BRAND_BANNER_URL
-    : (process.env.SELF_URL ? `${process.env.SELF_URL}/assets/StarCityBanner1.jpg` : null),
+    : (process.env.SELF_URL ? `${process.env.SELF_URL}/assets/StarCityBanner1.jpg?v=${ASSET_VER}` : null),
 };
 
 // StarCity Server Konfiguration
@@ -587,6 +589,8 @@ async function createTicketChannel({
     embed.setImage(BRAND.banner);
   }
 
+  // Moderner Header mit Logo als Author-Icon ist gesetzt; zusätzlich kleiner Footer-Icon bereits vorhanden.
+
   const bewerberText = applicantDiscordId ? `<@${applicantDiscordId}> (${clean(form.discordTag || applicantTag)})` : clean(form.discordTag || applicantTag);
 
   // Premium Feld-Struktur mit Icons und besserer Organisation
@@ -708,45 +712,69 @@ async function createTranscript(channel, meta) {
       lastId = batch.last()?.id;
     }
     
-    // Transcript erstellen
-    const transcript = [];
-    transcript.push(`# Transcript für Ticket ${meta.caseId}`);
-    transcript.push(`**Erstellt:** <t:${Math.floor(meta.createdAt / 1000)}:F>`);
-    transcript.push(`**Bewerber:** ${meta.applicantDiscordId ? `<@${meta.applicantDiscordId}>` : 'Unbekannt'}`);
-    transcript.push(`**Status:** ${meta.status}`);
-    if (meta.claimedBy) transcript.push(`**Übernommen von:** <@${meta.claimedBy}>`);
-    if (meta.closedBy) transcript.push(`**Geschlossen von:** <@${meta.closedBy}>`);
-    transcript.push(`**Channel:** #${channel.name}`);
-    transcript.push(`**Erstellt am:** <t:${Math.floor(Date.now() / 1000)}:F>`);
-    transcript.push('');
-    transcript.push('---');
-    transcript.push('');
-    
-    // Nachrichten hinzufügen
+    // HTML Transcript erstellen
+    const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    const header = `<!DOCTYPE html><html lang="de"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Transcript ${esc(meta.caseId)}</title>
+<style>
+  body{font-family:Inter,Segoe UI,Arial,sans-serif;background:#0b1220;color:#e6edf3;margin:0}
+  .wrap{max-width:960px;margin:0 auto;padding:24px}
+  .hero{display:flex;align-items:center;gap:16px;margin-bottom:16px}
+  .hero img.logo{width:48px;height:48px;border-radius:8px}
+  .banner{width:100%;border-radius:10px;margin:8px 0}
+  .meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:12px 0}
+  .meta .card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:12px}
+  .msg{display:flex;gap:12px;padding:12px;border-bottom:1px solid #1e293b}
+  .avatar{width:36px;height:36px;border-radius:50%;flex:0 0 36px}
+  .msg .head{font-size:12px;color:#94a3b8}
+  .msg .content{white-space:pre-wrap;word-break:break-word;margin-top:2px}
+  .attach, .embed{margin-top:8px;font-size:12px;color:#cbd5e1}
+  .time{color:#64748b}
+  .title{font-weight:600}
+</style></head><body><div class="wrap">
+  <div class="hero">
+    ${BRAND.icon ? `<img class="logo" src="${esc(BRAND.icon)}" alt="logo"/>` : ''}
+    <div>
+      <div class="title">StarCity Ticket Transcript</div>
+      <div class="time">${esc(meta.caseId)} • #${esc(channel.name)}</div>
+    </div>
+  </div>
+  ${BRAND.banner ? `<img class="banner" src="${esc(BRAND.banner)}" alt="banner"/>` : ''}
+  <div class="meta">
+    <div class="card"><div class="title">Bewerber</div>${meta.applicantDiscordId ? `@${meta.applicantDiscordId}` : 'Unbekannt'}</div>
+    <div class="card"><div class="title">Status</div>${esc(meta.status)}</div>
+    <div class="card"><div class="title">Erstellt</div>${new Date(meta.createdAt).toLocaleString('de-DE')}</div>
+    ${meta.claimedBy ? `<div class="card"><div class="title">Übernommen von</div>@${esc(meta.claimedBy)}</div>` : ''}
+    ${meta.closedBy ? `<div class="card"><div class="title">Geschlossen von</div>@${esc(meta.closedBy)}</div>` : ''}
+  </div>
+`;
+
+    const parts = [header];
     for (const message of messages) {
-      const timestamp = `<t:${Math.floor(message.createdTimestamp / 1000)}:T>`;
-      const author = message.author.tag;
-      const content = message.content || '*[Kein Text]*';
-      
-      transcript.push(`[${timestamp}] ${author}: ${content}`);
-      
-      // Embeds hinzufügen
-      if (message.embeds.length > 0) {
-        for (const embed of message.embeds) {
-          if (embed.title) transcript.push(`  📋 ${embed.title}`);
-          if (embed.description) transcript.push(`  ${embed.description}`);
+      const avatar = message.author?.displayAvatarURL?.({ size: 64 }) || message.author?.avatarURL?.() || '';
+      const line = [`<div class="msg">`];
+      line.push(avatar ? `<img class="avatar" src="${esc(avatar)}" alt="avatar"/>` : `<div class="avatar" style="background:#1f2937"></div>`);
+      line.push(`<div><div class="head"><span class="title">${esc(message.author?.tag || message.author?.username || 'Unbekannt')}</span> <span class="time">${new Date(message.createdTimestamp).toLocaleString('de-DE')}</span></div>`);
+      const content = message.content ? esc(message.content) : '';
+      if (content) line.push(`<div class="content">${content}</div>`);
+      if (message.embeds?.length) {
+        for (const emb of message.embeds) {
+          const t = emb.title ? esc(emb.title) : '';
+          const d = emb.description ? esc(emb.description) : '';
+          if (t || d) line.push(`<div class="embed">${t ? `<div class="title">${t}</div>` : ''}${d ? `<div>${d}</div>` : ''}</div>`);
         }
       }
-      
-      // Attachments hinzufügen
-      if (message.attachments.size > 0) {
-        for (const attachment of message.attachments.values()) {
-          transcript.push(`  📎 ${attachment.name} (${attachment.url})`);
+      if (message.attachments?.size) {
+        for (const att of message.attachments.values()) {
+          line.push(`<div class="attach">📎 <a href="${esc(att.url)}" target="_blank" rel="noopener">${esc(att.name)}</a></div>`);
         }
       }
+      line.push(`</div></div>`);
+      parts.push(line.join(''));
     }
-    
-    return transcript.join('\n');
+    parts.push(`</div></body></html>`);
+    return parts.join('');
     
   } catch (error) {
     console.error(`Fehler beim Erstellen des Transcripts:`, error);
@@ -1019,7 +1047,7 @@ async function handleTicketClose(interaction, traceId) {
               // Transcript in Datei umwandeln
               const buffer = Buffer.from(transcript, 'utf8');
               const attachment = {
-                name: `transcript-${meta.caseId}-${Date.now()}.md`,
+                name: `transcript-${meta.caseId}-${Date.now()}.html`,
                 attachment: buffer
               };
               
@@ -1047,10 +1075,10 @@ async function handleTicketClose(interaction, traceId) {
           }
         }
         
-        // Warte 5 Sekunden, dann Channel löschen und Ticket aus Storage entfernen
+        // Warte 2 Sekunden, dann Channel löschen und Ticket aus Storage entfernen
         setTimeout(async () => {
           try {
-            console.log(`[${traceId}] Lösche Channel ${channel.id} nach 5 Sekunden`);
+            console.log(`[${traceId}] Lösche Channel ${channel.id} nach 2 Sekunden`);
             await channel.delete('Ticket geschlossen - automatische Löschung');
             console.log(`[${traceId}] Channel erfolgreich gelöscht`);
             ticketMetaStorage.delete(channel.id);
@@ -1058,12 +1086,12 @@ async function handleTicketClose(interaction, traceId) {
           } catch (deleteError) {
             console.error(`[${traceId}] Fehler beim Löschen des Channels:`, deleteError);
           }
-        }, 5000);
+        }, 2000);
         
       } catch (transcriptError) {
         console.error(`[${traceId}] Fehler beim Erstellen des Transcripts:`, transcriptError);
         
-        // Channel trotzdem nach 10 Sekunden löschen und Ticket aus Storage entfernen
+        // Channel trotzdem nach 5 Sekunden löschen und Ticket aus Storage entfernen
         setTimeout(async () => {
           try {
             await channel.delete('Ticket geschlossen - automatische Löschung (ohne Transcript)');
@@ -1071,7 +1099,7 @@ async function handleTicketClose(interaction, traceId) {
           } catch (deleteError) {
             console.error(`[${traceId}] Fehler beim Löschen des Channels:`, deleteError);
           }
-        }, 10000);
+        }, 5000);
       }
     });
 
@@ -1430,7 +1458,7 @@ client.on('interactionCreate', async (interaction) => {
                   if (logChannel) {
                     const buffer = Buffer.from(transcript, 'utf8');
                     const attachment = {
-                      name: `transcript-${meta.caseId}-${Date.now()}.md`,
+                      name: `transcript-${meta.caseId}-${Date.now()}.html`,
                       attachment: buffer
                     };
                     const transcriptEmbed = new EmbedBuilder()
